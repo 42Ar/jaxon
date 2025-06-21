@@ -13,7 +13,7 @@ import tempfile
 import numpy as np
 import unittest
 from .test_util import tree_equal
-from jaxon import load, save
+from jaxon import load, save, JAXON_SCALAR_BINARY_TYPES
 
 
 class RoundtripTests(unittest.TestCase):
@@ -32,6 +32,12 @@ class RoundtripTests(unittest.TestCase):
             "list": [4, "asf"],
             "tuple": (4, 3, "dsf", 5.5),
             "bytes": b"xfg",
+            "int64": np.int64(313245),
+            "float64": np.float64(3465.34),
+            "int32": np.int32(487),
+            "scalars": [scalar_type(0) for scalar_type in JAXON_SCALAR_BINARY_TYPES],
+            "bool": np.bool(3465.34),
+            "complex128": np.complex128(123 + 32j),
             "key/with/slashes": {
                 "more/slahes": 5
             }
@@ -43,6 +49,7 @@ class RoundtripTests(unittest.TestCase):
         pytree = {
             "int32": np.arange(100, dtype=np.int32),
             "int64": np.arange(100, dtype=np.int64),
+            "other": [np.zeros(100, dtype=scalar_type) for scalar_type in JAXON_SCALAR_BINARY_TYPES],
         }
         for exact_python_types in (False, True):
             self.run_roundtrip_test(pytree, exact_python_types)

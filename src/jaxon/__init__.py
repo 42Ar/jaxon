@@ -1,5 +1,5 @@
 """
-Main module that provides the save and load functions, as well as to_jaxon, from_jaxon.
+Main module that provides the save and load functions, as well as to_jaxon and from_jaxon.
 
 Author
 ------
@@ -12,9 +12,13 @@ import h5py
 import dill
 
 
-JAXON_NONE = "None"
 JAXON_ROOT_NAME = "root"
-JAXON_SCALAR_BINARY_TYPES = (np.int64, np.float64, np.bool, np.complex128)
+JAXON_SCALAR_BINARY_TYPES = (
+    np.int8, np.int16, np.int32, np.int64,
+    np.uint8, np.uint16, np.uint32, np.uint64,
+    np.float16, np.float32, np.float64, np.float128,
+    np.complex64, np.complex128,
+    np.bool)
 
 
 def get_package_path(obj):
@@ -26,15 +30,10 @@ def create_instance(package_path):
 
 
 def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=None,
-             exact_python_types=False, parent_objects=None, debug_path=None):
-    if debug_path is None:
-        debug_path = ""
-    else:
-        debug_path += "." + name
-    
+             exact_python_types=False, parent_objects=None, debug_path=""):
     # handle primitive scalar types
     if pytree is None:
-        group.attrs[name] = JAXON_NONE
+        group.attrs[name] = h5py.Empty(dtype=None)
         return
     if exact_python_types and type(pytree) in (int, float, bool, complex):
         rep = repr(pytree)
@@ -54,9 +53,13 @@ def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=
         return
 
     # handle arrays
-    if type(pytree) in (np.ndarray, jnp.ndarray, bytes):
+    if type(pytree) in (np.ndarray, jnp.ndarray) and pytree.dtype in JAXON_SCALAR_BINARY_TYPES:
         group.create_dataset(name, data=pytree)
-        group.attrs[name] = "bytes" if type(pytree) is bytes else get_package_path(pytree)
+        group.attrs[name] = get_package_path(pytree)
+        return
+    if type(pytree) is bytes:
+        group.create_dataset(name, data=pytree)
+        group.attrs[name] = "bytes"
         return
 
     # handle container types
@@ -76,24 +79,22 @@ def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=
         parent_objects += [pytree]
     if type(pytree) in (list, tuple, dict):
         attr_value = type(pytree).__name__ + attr_value
-        if used_to_jaxon:
-            debug_path += f"({attr_value})"
+        debug_path += f"[{attr_value}]"
         sub_group = group.create_group(name, track_order=True)
         if type(pytree) is dict:
             for k, v in pytree.items():
                 to_jaxon(v, sub_group, k, allow_dill, dill_kwargs, exact_python_types,
-                            parent_objects, f"{debug_path}[{k!r}]")
+                            parent_objects, f"{debug_path}.{k}")
         else:
             for i, v in enumerate(pytree):
                 to_jaxon(v, sub_group, str(i), allow_dill, dill_kwargs, exact_python_types,
-                        parent_objects, f"{debug_path}[{i}]")
+                        parent_objects, f"{debug_path}({i})")
         group.attrs[name] = attr_value
         return
 
     # use dill for any other objects if enabled
     attr_value = "!" + get_package_path(pytree) + attr_value  # the '!' denotes that the object is serialized
-    if used_to_jaxon:
-        debug_path += f"({attr_value})"
+    debug_path += f"[{attr_value}]"
     if allow_dill:
         if dill_kwargs is None:
             dill_kwargs = {}
@@ -109,15 +110,11 @@ def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=
                      "serialized if allow_dill is set to True.")
 
 
-def from_jaxon(group, name, allow_dill=False, dill_kwargs=None, debug_path=None):
-    if debug_path is None:
-        debug_path = ""
-    else:
-        debug_path += "." + name
+def from_jaxon(group, name, allow_dill=False, dill_kwargs=None, debug_path=""):
     val = group.attrs[name]
 
     # handle primitive scalar types
-    if val == JAXON_NONE:
+    if isinstance(val, h5py.Empty):
         return None
     if isinstance(val, JAXON_SCALAR_BINARY_TYPES):
         # here we also unpack primitives like int or float if they were saved
@@ -141,16 +138,16 @@ def from_jaxon(group, name, allow_dill=False, dill_kwargs=None, debug_path=None)
         return jnp.array(group[name][()])
 
     # handle container types
-    debug_path = f"{debug_path}({val})"
+    debug_path = f"{debug_path}[{val}]"
     types = val.split("#")
     if types[0] == "dict":
         dict_group = group[name]
-        jaxon = {name: from_jaxon(dict_group, name, allow_dill, dill_kwargs, debug_path)
+        jaxon = {name: from_jaxon(dict_group, name, allow_dill, dill_kwargs, f"{debug_path}.{name}")
                  for name in dict_group.attrs}
     elif types[0] in ("list", "tuple"):
         dict_group = group[name]
-        jaxon = [from_jaxon(dict_group, name, allow_dill, dill_kwargs, debug_path)
-                 for name in dict_group.attrs]
+        jaxon = [from_jaxon(dict_group, name, allow_dill, dill_kwargs, f"{debug_path}({i})")
+                 for i, name in enumerate(dict_group.attrs)]
         if types[0] == "tuple":
             jaxon = tuple(jaxon)
     elif types[0][0] == "!":
