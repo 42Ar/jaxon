@@ -13,12 +13,19 @@ import dill
 
 
 JAXON_ROOT_NAME = "root"
-JAXON_SCALAR_BINARY_TYPES = (
+JAXON_NP_NUMERIC_TYPES = (
     np.int8, np.int16, np.int32, np.int64,
     np.uint8, np.uint16, np.uint32, np.uint64,
     np.float16, np.float32, np.float64, np.float128,
     np.complex64, np.complex128,
     np.bool)
+JAXON_PY_NUMERIC_TYPES = (int, float, bool, complex)
+
+
+
+class CircularPytreeException(Exception):
+    """Raised when a circular reference (reference to a parent object) was detected."""
+    pass
 
 
 def get_package_path(obj):
@@ -29,44 +36,63 @@ def create_instance(package_path):
     return None
 
 
+def range_from_repr(repr_content):
+    fields = repr_content.split(",")
+    assert len(fields) in (2, 3)
+    return range(*[int(f) for f in fields])
+
+
+def slice_from_repr(repr_content):
+    fields = repr_content.split(",")
+    assert len(fields) == 3
+    return slice(*[(None if f == "None" else int(f)) for f in fields])
+
+
 def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=None,
              exact_python_types=False, parent_objects=None, debug_path=""):
     # handle primitive scalar types
     if pytree is None:
         group.attrs[name] = h5py.Empty(dtype=None)
         return
-    if exact_python_types and type(pytree) in (int, float, bool, complex):
+    if exact_python_types and type(pytree) in JAXON_PY_NUMERIC_TYPES:
         rep = repr(pytree)
         if type(pytree) is complex:
             rep = rep[1:-1]  # remove unnecessary brackets
         group.attrs[name] = f"{type(pytree).__name__}({rep})"
         return
-    if (type(pytree) in JAXON_SCALAR_BINARY_TYPES
-        or (not exact_python_types and isinstance(pytree, (int, float, bool, complex)))):
+    if (type(pytree) in JAXON_NP_NUMERIC_TYPES
+        or (not exact_python_types and isinstance(pytree, JAXON_PY_NUMERIC_TYPES))):
         # this is more relaxed than if exact_python_types=True
         # since it can implicitly converts int to int64 and so on
         group.attrs[name] = pytree
         return
-    if type(pytree) is str or (not exact_python_types and isinstance(pytree, str)):
-        # add qoutation marks to avoid possible naming collision with a type hint
-        group.attrs[name] = repr(pytree)
+    other_repr_types = (str, range, slice, type(...))  # remaining types that are stored using repr
+    if (type(pytree) in other_repr_types or (not exact_python_types and isinstance(pytree, other_repr_types))):
+        # note: repr adds qoutation marks for str which avoids possible naming
+        # collision with a type hint
+        attr_value = repr(pytree)
+        if type(pytree) in (range, slice):
+            # remove unnecessary spaces which would cause parsing to fail
+            attr_value = attr_value.replace(" ", "")
+        group.attrs[name] = attr_value
         return
 
     # handle arrays
-    if type(pytree) in (np.ndarray, jnp.ndarray) and pytree.dtype in JAXON_SCALAR_BINARY_TYPES:
+    if type(pytree) in (np.ndarray, jnp.ndarray) and pytree.dtype in JAXON_NP_NUMERIC_TYPES:
         group.create_dataset(name, data=pytree)
         group.attrs[name] = get_package_path(pytree)
         return
-    if type(pytree) is bytes:
-        group.create_dataset(name, data=pytree)
-        group.attrs[name] = "bytes"
+    if type(pytree) in (bytes, bytearray, memoryview):
+        # do not store as a (fixed or variable) string, as this causes errors with zero bytes at the end
+        group.create_dataset(name, data=np.frombuffer(pytree, dtype=np.uint8))
+        group.attrs[name] = type(pytree).__name__
         return
 
     # handle container types
     if parent_objects is None:
         parent_objects = [pytree]  # root node
     elif any(pytree is p for p in parent_objects):
-        raise ValueError(f"detected circular reference in pytree at {debug_path!r}")
+        raise CircularPytreeException(f"detected circular reference in pytree at {debug_path!r}")
     else:
         parent_objects = parent_objects + [pytree]  # Descend. Need new list of parents here.
     used_to_jaxon = False
@@ -77,7 +103,7 @@ def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=
         # the '#' indicates that the class uses the to_jaxon/from_jaxon interface
         attr_value = attr_value + "#" + get_package_path(pytree)
         parent_objects += [pytree]
-    if type(pytree) in (list, tuple, dict):
+    if type(pytree) in (list, tuple, dict, set, frozenset):
         attr_value = type(pytree).__name__ + attr_value
         debug_path += f"[{attr_value}]"
         sub_group = group.create_group(name, track_order=True)
@@ -88,7 +114,7 @@ def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=
         else:
             for i, v in enumerate(pytree):
                 to_jaxon(v, sub_group, str(i), allow_dill, dill_kwargs, exact_python_types,
-                        parent_objects, f"{debug_path}({i})")
+                         parent_objects, f"{debug_path}({i})")
         group.attrs[name] = attr_value
         return
 
@@ -98,8 +124,10 @@ def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=
     if allow_dill:
         if dill_kwargs is None:
             dill_kwargs = {}
-        group.create_dataset(name, data=dill.dumps(pytree, **dill_kwargs))
-        group.attrs[name] = attr_value + "!" + get_package_path(pytree)
+        pybytes = dill.dumps(pytree, **dill_kwargs)
+        # do not store as a (fixed or variable) string, as this causes errors with zero bytes at the end
+        group.create_dataset(name, data=np.frombuffer(pybytes, dtype=np.uint8))
+        group.attrs[name] = attr_value
         return
     if used_to_jaxon:
         raise TypeError(f"Object at {debug_path!r} is not a valid jaxon container type; it was "
@@ -116,7 +144,7 @@ def from_jaxon(group, name, allow_dill=False, dill_kwargs=None, debug_path=""):
     # handle primitive scalar types
     if isinstance(val, h5py.Empty):
         return None
-    if isinstance(val, JAXON_SCALAR_BINARY_TYPES):
+    if isinstance(val, JAXON_NP_NUMERIC_TYPES):
         # here we also unpack primitives like int or float if they were saved
         # with exact_python_types=False
         return val
@@ -124,15 +152,29 @@ def from_jaxon(group, name, allow_dill=False, dill_kwargs=None, debug_path=""):
     if val[0] == "'":
         assert len(val) >= 2 and val[-1] == "'", "string parsing error: unexpected termination"
         return val[1:-1]
-    for primitive in (int, float, bool, complex):
+    if val == "Ellipsis":
+        return ...
+    other_repr_types = [(int, None), (float, None), (bool, None), (complex, None),
+                        (range, range_from_repr), (slice, slice_from_repr)]
+    for primitive, parser in other_repr_types:
         # here, we parse primitives that were saved with exact_python_types=True
         type_name = primitive.__name__
-        if val.startswith(type_name):
-            assert val[len(type_name)] == "(" and val[-1] == ")", "primitive parsing error"
-            return primitive(val[len(type_name) + 1:-1])
+        if not val.startswith(type_name):
+            continue
+        assert val[len(type_name)] == "(" and val[-1] == ")", "primitive parsing error"
+        repr_content = val[len(type_name) + 1:-1]
+        if parser is not None:
+            return parser(repr_content)
+        return primitive(repr_content)
 
     # handle arrays
-    if val in ("numpy.ndarray", "bytes"):
+    if val == "bytes":
+        return bytes(group[name][()])
+    if val == "bytearray":
+        return bytearray(group[name][()])
+    if val == "memoryview":
+        return memoryview(group[name][()])
+    if val == "numpy.ndarray":
         return group[name][()]
     if val == "jax.ndarray":
         return jnp.array(group[name][()])
@@ -144,20 +186,26 @@ def from_jaxon(group, name, allow_dill=False, dill_kwargs=None, debug_path=""):
         dict_group = group[name]
         jaxon = {name: from_jaxon(dict_group, name, allow_dill, dill_kwargs, f"{debug_path}.{name}")
                  for name in dict_group.attrs}
-    elif types[0] in ("list", "tuple"):
+    elif types[0] in ("list", "tuple", "set", "frozenset"):
         dict_group = group[name]
         jaxon = [from_jaxon(dict_group, name, allow_dill, dill_kwargs, f"{debug_path}({i})")
                  for i, name in enumerate(dict_group.attrs)]
         if types[0] == "tuple":
             jaxon = tuple(jaxon)
+        if types[0] == "set":
+            jaxon = set(jaxon)
+        if types[0] == "frozenset":
+            jaxon = frozenset(jaxon)
     elif types[0][0] == "!":
         if allow_dill:
-            jaxon = dill.loads(group[name], **dill_kwargs)
+            if dill_kwargs is None:
+                dill_kwargs = {}
+            jaxon = dill.loads(group[name][()], **dill_kwargs)
         else:
             raise ValueError(f"cannot load serialized object at {debug_path!r}, "
                               "as allow_dill=False")
     else:
-        raise ValueError(f"type of object at {debug_path!r} not undesrtood")
+        raise ValueError(f"type of object at {debug_path!r} not understood")
     for package_path in types[1:]:
         instance = create_instance(package_path)
         if hasattr(instance):
