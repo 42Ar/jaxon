@@ -23,14 +23,15 @@ class TestObjectForDill:
 
 
 class RoundtripTests(unittest.TestCase):
-    def do_roundtrip(self, pytree, exact_python_types, allow_dill=False):
+    def do_roundtrip(self, pytree, exact_python_numeric_types, allow_dill=False, downcast_to_base_types=None):
         with tempfile.TemporaryFile() as fp:
-            save(fp, pytree, exact_python_types=exact_python_types, allow_dill=allow_dill)
+            save(fp, pytree, exact_python_numeric_types=exact_python_numeric_types,
+                 downcast_to_base_types=downcast_to_base_types, allow_dill=allow_dill)
             return load(fp, allow_dill=allow_dill)
 
-    def run_roundtrip_test(self, pytree, exact_python_types, allow_dill=False):
-        loaded = self.do_roundtrip(pytree, exact_python_types, allow_dill)
-        self.assertTrue(tree_equal(loaded, pytree, typematch=exact_python_types, rtol=0, atol=0))
+    def run_roundtrip_test(self, pytree, exact_python_numeric_types, allow_dill=False):
+        loaded = self.do_roundtrip(pytree, exact_python_numeric_types, allow_dill)
+        self.assertTrue(tree_equal(loaded, pytree, typematch=exact_python_numeric_types, rtol=0, atol=0))
 
     def test_simple_types(self):
         pytree = {
@@ -64,8 +65,8 @@ class RoundtripTests(unittest.TestCase):
             "slice2": slice(2, 2143),
             "slice3": slice(2, 2132, 23)
         }
-        for exact_python_types in (False, True):
-            self.run_roundtrip_test(pytree, exact_python_types)
+        for exact_python_numeric_types in (False, True):
+            self.run_roundtrip_test(pytree, exact_python_numeric_types)
 
     def test_numpy_ararys(self):
         pytree = {
@@ -73,24 +74,24 @@ class RoundtripTests(unittest.TestCase):
             "int64": np.arange(100, dtype=np.int64),
             "other": [np.zeros(100, dtype=scalar_type) for scalar_type in JAXON_NP_NUMERIC_TYPES],
         }
-        for exact_python_types in (False, True):
-            self.run_roundtrip_test(pytree, exact_python_types)
+        for exact_python_numeric_types in (False, True):
+            self.run_roundtrip_test(pytree, exact_python_numeric_types)
 
     def test_trivial_roots(self):
-        for exact_python_types in (False, True):
-            self.run_roundtrip_test(1, exact_python_types)
-            self.run_roundtrip_test(None, exact_python_types)
-            self.run_roundtrip_test({}, exact_python_types)
-            self.run_roundtrip_test({"a": 345}, exact_python_types)
-            self.run_roundtrip_test([], exact_python_types)
-            self.run_roundtrip_test([3], exact_python_types)
-            self.run_roundtrip_test(b"dfuikfhk\0\0ufs", exact_python_types)
+        for exact_python_numeric_types in (False, True):
+            self.run_roundtrip_test(1, exact_python_numeric_types)
+            self.run_roundtrip_test(None, exact_python_numeric_types)
+            self.run_roundtrip_test({}, exact_python_numeric_types)
+            self.run_roundtrip_test({"a": 345}, exact_python_numeric_types)
+            self.run_roundtrip_test([], exact_python_numeric_types)
+            self.run_roundtrip_test([3], exact_python_numeric_types)
+            self.run_roundtrip_test(b"dfuikfhk\0\0ufs", exact_python_numeric_types)
 
     def test_nonstring_dict_keys(self):
         pytree = {
         }
-        for exact_python_types in (False, True):
-            self.run_roundtrip_test(pytree, exact_python_types)
+        for exact_python_numeric_types in (False, True):
+            self.run_roundtrip_test(pytree, exact_python_numeric_types)
 
     def test_dill_object_at_root(self):
         r = self.do_roundtrip(TestObjectForDill(), False, allow_dill=True)
@@ -99,8 +100,49 @@ class RoundtripTests(unittest.TestCase):
 
     def test_dill_objects_in_container(self):
         pytree = [{"adssd": TestObjectForDill()}, TestObjectForDill()]
-        for exact_python_types in (False, True):
-            self.run_roundtrip_test(pytree, exact_python_types, allow_dill=True)
+        for exact_python_numeric_types in (False, True):
+            self.run_roundtrip_test(pytree, exact_python_numeric_types, allow_dill=True)
+
+    def test_numeric_type_conversion(self):
+        pytree = {"int": 3, "float": 45.4, "complex": 4j + 4, "bool": True}
+        out = self.do_roundtrip(pytree, exact_python_numeric_types=False)
+        self.assertEqual(type(out["int"]), np.int64)
+        self.assertEqual(type(out["float"]), np.float64)
+        self.assertEqual(type(out["complex"]), np.complex128)
+        self.assertEqual(type(out["bool"]), np.bool)
+    
+    def test_type_downcast(self):
+        class testint(int):
+            pass
+        class testint64(np.int64):
+            pass
+        pytree = {"testint": testint(), "testint64": testint64()}
+        out = self.do_roundtrip(pytree, exact_python_numeric_types=True, downcast_to_base_types=(testint, testint64))
+        self.assertEqual(type(out["testint"]), int)
+        self.assertEqual(type(out["testint64"]), np.int64)
+
+    def test_container_type_downcast(self):
+        class mydict(dict):
+            pass
+        class mylist(list):
+            pass
+        class mytuple(tuple):
+            pass
+        pytree = mydict({"mylist": mylist([12, 231, mylist(["ads"])]), "mytuple": mytuple((324, 234, "df"))})
+        out = self.do_roundtrip(pytree, exact_python_numeric_types=True, downcast_to_base_types=[mydict, mylist, mytuple])
+        self.assertEqual(type(out), dict)
+        self.assertEqual(type(out["mylist"]), list)
+        self.assertEqual(type(out["mytuple"]), tuple)
+
+    def test_numeric_and_type_downcast(self):
+        class testint(int):
+            pass
+        class testint64(np.int64):
+            pass
+        pytree = {"testint": testint(), "testint64": testint64()}
+        out = self.do_roundtrip(pytree, exact_python_numeric_types=False, downcast_to_base_types=(testint, testint64))
+        self.assertEqual(type(out["testint"]), np.int64)
+        self.assertEqual(type(out["testint64"]), np.int64)
 
 
 class ErrorBranchTests(unittest.TestCase):

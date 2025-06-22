@@ -20,7 +20,8 @@ JAXON_NP_NUMERIC_TYPES = (
     np.complex64, np.complex128,
     np.bool)
 JAXON_PY_NUMERIC_TYPES = (int, float, bool, complex)
-
+JAXON_NONE = "None"
+JAXON_ELLIPSIS = "Ellipsis"
 
 
 class CircularPytreeException(Exception):
@@ -48,44 +49,60 @@ def slice_from_repr(repr_content):
     return slice(*[(None if f == "None" else int(f)) for f in fields])
 
 
+def _base_type_name(obj, types, downcast_to_base_types):
+    for t in types:
+        if type(obj) is t or (type(obj) in downcast_to_base_types and isinstance(obj, t)):
+            return t.__name__
+    return None
+
+
 def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=None,
-             exact_python_types=False, parent_objects=None, debug_path=""):
+             downcast_to_base_types: tuple = tuple(), py_to_np_types: tuple = tuple(),
+             parent_objects=None, debug_path=""):
     # handle primitive scalar types
     if pytree is None:
-        group.attrs[name] = h5py.Empty(dtype=None)
+        group.attrs[name] = JAXON_NONE
         return
-    if exact_python_types and type(pytree) in JAXON_PY_NUMERIC_TYPES:
-        rep = repr(pytree)
-        if type(pytree) is complex:
-            rep = rep[1:-1]  # remove unnecessary brackets
-        group.attrs[name] = f"{type(pytree).__name__}({rep})"
+    if pytree is ...:
+        group.attrs[name] = JAXON_ELLIPSIS
         return
-    if (type(pytree) in JAXON_NP_NUMERIC_TYPES
-        or (not exact_python_types and isinstance(pytree, JAXON_PY_NUMERIC_TYPES))):
-        # this is more relaxed than if exact_python_types=True
-        # since it can implicitly converts int to int64 and so on
+    np_numeric_type = _base_type_name(pytree, JAXON_NP_NUMERIC_TYPES, downcast_to_base_types)
+    if np_numeric_type is not None:
         group.attrs[name] = pytree
         return
-    other_repr_types = (str, range, slice, type(...))  # remaining types that are stored using repr
-    if (type(pytree) in other_repr_types or (not exact_python_types and isinstance(pytree, other_repr_types))):
+    py_numeric_type = _base_type_name(pytree, JAXON_PY_NUMERIC_TYPES, downcast_to_base_types)
+    if py_numeric_type is not None:
+        if isinstance(pytree, py_to_np_types):
+            # this assignment implicitly converts the type from python to numpy (e.g. int to int64)
+            group.attrs[name] = pytree
+            return
+        rep = repr(pytree)
+        if isinstance(pytree, complex):
+            rep = rep[1:-1]  # remove unnecessary brackets
+        group.attrs[name] = f"{py_numeric_type}({rep})"
+        return
+    other_repr_type = _base_type_name(pytree, (str, range, slice), downcast_to_base_types)
+    if other_repr_type is not None:
         # note: repr adds qoutation marks for str which avoids possible naming
         # collision with a type hint
         attr_value = repr(pytree)
-        if type(pytree) in (range, slice):
+        if isinstance(pytree, (range, slice)):
             # remove unnecessary spaces which would cause parsing to fail
             attr_value = attr_value.replace(" ", "")
         group.attrs[name] = attr_value
         return
 
     # handle arrays
-    if type(pytree) in (np.ndarray, jnp.ndarray) and pytree.dtype in JAXON_NP_NUMERIC_TYPES:
+    array_type = _base_type_name(pytree, (np.ndarray, jnp.ndarray), downcast_to_base_types)
+    if array_type is not None and pytree.dtype in JAXON_NP_NUMERIC_TYPES:
         group.create_dataset(name, data=pytree)
-        group.attrs[name] = get_package_path(pytree)
+        group.attrs[name] = "numpy.ndarray" if isinstance(pytree, np.ndarray) else "jax.ndarray"
         return
-    if type(pytree) in (bytes, bytearray, memoryview):
+    byte_buffer_type = _base_type_name(pytree, (bytes, bytearray, memoryview), downcast_to_base_types)
+    if byte_buffer_type is not None:
         # do not store as a (fixed or variable) string, as this causes errors with zero bytes at the end
         group.create_dataset(name, data=np.frombuffer(pytree, dtype=np.uint8))
-        group.attrs[name] = type(pytree).__name__
+        group.attrs[name] = byte_buffer_type
         return
 
     # handle container types
@@ -103,18 +120,19 @@ def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=
         # the '#' indicates that the class uses the to_jaxon/from_jaxon interface
         attr_value = attr_value + "#" + get_package_path(pytree)
         parent_objects += [pytree]
-    if type(pytree) in (list, tuple, dict, set, frozenset):
-        attr_value = type(pytree).__name__ + attr_value
+    container_type = _base_type_name(pytree, (list, tuple, dict, set, frozenset), downcast_to_base_types)
+    if container_type is not None:
+        attr_value = container_type + attr_value
         debug_path += f"[{attr_value}]"
         sub_group = group.create_group(name, track_order=True)
-        if type(pytree) is dict:
+        if isinstance(pytree, dict):
             for k, v in pytree.items():
-                to_jaxon(v, sub_group, k, allow_dill, dill_kwargs, exact_python_types,
-                            parent_objects, f"{debug_path}.{k}")
+                to_jaxon(v, sub_group, k, allow_dill, dill_kwargs, downcast_to_base_types,
+                         py_to_np_types, parent_objects, f"{debug_path}.{k}")
         else:
             for i, v in enumerate(pytree):
-                to_jaxon(v, sub_group, str(i), allow_dill, dill_kwargs, exact_python_types,
-                         parent_objects, f"{debug_path}({i})")
+                to_jaxon(v, sub_group, str(i), allow_dill, dill_kwargs, downcast_to_base_types,
+                         py_to_np_types, parent_objects, f"{debug_path}({i})")
         group.attrs[name] = attr_value
         return
 
@@ -142,8 +160,10 @@ def from_jaxon(group, name, allow_dill=False, dill_kwargs=None, debug_path=""):
     val = group.attrs[name]
 
     # handle primitive scalar types
-    if isinstance(val, h5py.Empty):
+    if val == JAXON_NONE:
         return None
+    if val == JAXON_ELLIPSIS:
+        return ...
     if isinstance(val, JAXON_NP_NUMERIC_TYPES):
         # here we also unpack primitives like int or float if they were saved
         # with exact_python_types=False
@@ -152,8 +172,6 @@ def from_jaxon(group, name, allow_dill=False, dill_kwargs=None, debug_path=""):
     if val[0] == "'":
         assert len(val) >= 2 and val[-1] == "'", "string parsing error: unexpected termination"
         return val[1:-1]
-    if val == "Ellipsis":
-        return ...
     other_repr_types = [(int, None), (float, None), (bool, None), (complex, None),
                         (range, range_from_repr), (slice, slice_from_repr)]
     for primitive, parser in other_repr_types:
@@ -216,10 +234,22 @@ def from_jaxon(group, name, allow_dill=False, dill_kwargs=None, debug_path=""):
     return jaxon
 
 
-def save(path, pytree, exact_python_types=True, allow_dill=False, dill_kwargs=None):
+def save(path, pytree, exact_python_numeric_types=True, downcast_to_base_types=None,
+         py_to_np_types=None, allow_dill=False, dill_kwargs=None):
+    if py_to_np_types is None:
+        if exact_python_numeric_types:
+            py_to_np_types = tuple()
+        else:
+            py_to_np_types = JAXON_PY_NUMERIC_TYPES
+    else:
+        py_to_np_types = tuple(py_to_np_types)
+    if downcast_to_base_types is None:
+        downcast_to_base_types = tuple()
+    else:
+        downcast_to_base_types = tuple(downcast_to_base_types)
     with h5py.File(path, 'w', track_order=True) as file:
-        to_jaxon(pytree, file, exact_python_types=exact_python_types, allow_dill=allow_dill,
-                 dill_kwargs=dill_kwargs)
+        to_jaxon(pytree, file, downcast_to_base_types=downcast_to_base_types,
+                 py_to_np_types=py_to_np_types, allow_dill=allow_dill, dill_kwargs=dill_kwargs)
 
 
 def load(path, allow_dill=False, dill_kwargs=None):
