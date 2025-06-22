@@ -9,6 +9,8 @@ Frank Hermann
 """
 
 import tempfile
+import random
+import string
 import numpy as np
 import unittest
 from .test_util import tree_equal
@@ -55,12 +57,23 @@ class RoundtripTests(unittest.TestCase):
         loaded = self.do_roundtrip(pytree, exact_python_numeric_types, allow_dill)
         self.assertTrue(tree_equal(loaded, pytree, typematch=exact_python_numeric_types, rtol=0, atol=0))
 
+    def rand_string(self, seed, n):
+        random.seed(seed)
+        special = ["'", '"', "\0", "\r", "\n", "ä", "ö", "ü", "ß"]
+        return "".join(random.choices(list(string.ascii_uppercase) + special, k=n))
+
     def test_simple_types(self):
         pytree = {
             "complex": 1j + 5,
             "bool": True,
             "None": None,
-            "test_string": "string",
+            "string": "string",
+            "string_with_qoutation1": "'",
+            "string_with_qoutation2": '"',
+            "string_with_qoutation2": '"\'',
+            "string_with_zeros": '\0sfddf\0asdf',
+            "string_with_trailing_zeros": '\0sfddf\0asdf\0\0',
+            "string_with_trailing_zeros_and_non_ascii": '\0sfddf\0asdöüüäöüöäöüöüf\0\0'*5,
             "list": [4, "asf"],
             "tuple": (4, 3, "dsf", 5.5),
             "bytes": b"xfg",
@@ -108,12 +121,6 @@ class RoundtripTests(unittest.TestCase):
             self.run_roundtrip_test([], exact_python_numeric_types)
             self.run_roundtrip_test([3], exact_python_numeric_types)
             self.run_roundtrip_test(b"dfuikfhk\0\0ufs", exact_python_numeric_types)
-
-    def test_nonstring_dict_keys(self):
-        pytree = {
-        }
-        for exact_python_numeric_types in (False, True):
-            self.run_roundtrip_test(pytree, exact_python_numeric_types)
 
     def test_dill_object_at_root(self):
         r = self.do_roundtrip(TestObjectForDill(), False, allow_dill=True)
@@ -177,6 +184,26 @@ class RoundtripTests(unittest.TestCase):
         self.assertEqual(type(pytree["return_custom"]), CustomTypeReturnCustom)
         self.assertEqual(type(pytree["return_custom"].obj), CustomTypeReturnDict)
 
+
+    def test_single_big_attr_value(self):
+        pytree = self.rand_string(42, 1000000)
+        self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
+
+    def test_multi_big_attr_value(self):
+        pytree = [self.rand_string(i, 100000) for i in range(10)]
+        self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
+
+    def test_nonstring_dict_keys(self):
+        pytree = {
+            0: "ksdnkf",
+            1: "asd",
+            234: 5,
+            (34, 234): 8,
+            "sfddf": "dfs",
+            #CustomTypeReturnCustom("sdkhbfhbkd"): "fdsdf"
+        }
+        r = self.do_roundtrip(pytree, True)
+        self.assertTrue(pytree == r)
 
 class ErrorBranchTests(unittest.TestCase):
     def trigger_circular_reference_exception(self):
