@@ -22,6 +22,28 @@ class TestObjectForDill:
         return self.a == other.a
 
 
+class CustomTypeReturnDict:
+    def __init__(self, a):
+        self.a = a
+    
+    def from_jaxon(self, jaxon):
+        self.a = jaxon["a"]
+
+    def to_jaxon(self):
+        return {"a": self.a}
+
+
+class CustomTypeReturnCustom:
+    def __init__(self, obj):
+        self.obj = obj
+    
+    def from_jaxon(self, jaxon):
+        self.obj = jaxon
+
+    def to_jaxon(self):
+        return self.obj
+
+
 class RoundtripTests(unittest.TestCase):
     def do_roundtrip(self, pytree, exact_python_numeric_types, allow_dill=False, downcast_to_base_types=None):
         with tempfile.TemporaryFile() as fp:
@@ -144,6 +166,18 @@ class RoundtripTests(unittest.TestCase):
         self.assertEqual(type(out["testint"]), np.int64)
         self.assertEqual(type(out["testint64"]), np.int64)
 
+    def test_custom_types(self):
+        pytree = {
+            "return_dict": CustomTypeReturnDict(3),
+            "return_custom": CustomTypeReturnCustom(CustomTypeReturnDict(6)),
+            #"return_int": CustomTypeReturnCustom(5)
+        }
+        out = self.do_roundtrip(pytree, exact_python_numeric_types=True)
+        self.assertEqual(type(pytree["return_dict"]), CustomTypeReturnDict)
+        self.assertEqual(pytree["return_dict"].a, 3)
+        self.assertEqual(type(pytree["return_custom"]), CustomTypeReturnCustom)
+        self.assertEqual(type(pytree["return_custom"].obj), CustomTypeReturnDict)
+        self.assertEqual(pytree["return_custom"].obj.a, 6)
 
 class ErrorBranchTests(unittest.TestCase):
     def trigger_circular_reference_exception(self):

@@ -6,6 +6,7 @@ Author
 Frank Hermann
 """
 
+import importlib
 import jax.numpy as jnp
 import numpy as np
 import h5py
@@ -29,12 +30,17 @@ class CircularPytreeException(Exception):
     pass
 
 
-def get_package_path(obj):
+def get_qualified_name(obj):
     return type(obj).__module__ + "." + type(obj).__qualname__
 
 
-def create_instance(package_path):
-    return None
+def create_instance(qualified_name: str):
+    parts = qualified_name.split(".")
+    module_path = ".".join(parts[:-1])
+    class_name = parts[-1]
+    module = importlib.import_module(module_path)
+    cls = getattr(module, class_name)
+    return cls.__new__(cls)
 
 
 def range_from_repr(repr_content):
@@ -116,9 +122,9 @@ def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=
     attr_value = ""
     while hasattr(pytree, "to_jaxon"):
         used_to_jaxon = True
-        pytree = pytree.to_jaxon()
         # the '#' indicates that the class uses the to_jaxon/from_jaxon interface
-        attr_value = attr_value + "#" + get_package_path(pytree)
+        attr_value = "#" + get_qualified_name(pytree) + attr_value
+        pytree = pytree.to_jaxon()
         parent_objects += [pytree]
     container_type = _base_type_name(pytree, (list, tuple, dict, set, frozenset), downcast_to_base_types)
     if container_type is not None:
@@ -137,7 +143,7 @@ def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=
         return
 
     # use dill for any other objects if enabled
-    attr_value = "!" + get_package_path(pytree) + attr_value  # the '!' denotes that the object is serialized
+    attr_value = "!" + get_qualified_name(pytree) + attr_value  # the '!' denotes that the object is serialized
     debug_path += f"[{attr_value}]"
     if allow_dill:
         if dill_kwargs is None:
@@ -224,13 +230,14 @@ def from_jaxon(group, name, allow_dill=False, dill_kwargs=None, debug_path=""):
                               "as allow_dill=False")
     else:
         raise ValueError(f"type of object at {debug_path!r} not understood")
-    for package_path in types[1:]:
-        instance = create_instance(package_path)
-        if hasattr(instance):
-            jaxon = instance.from_jaxon(jaxon)
+    for qualified_name in types[1:]:
+        instance = create_instance(qualified_name)
+        if hasattr(instance, "from_jaxon"):
+            instance.from_jaxon(jaxon)
+            jaxon = instance
         else:
             raise ValueError(f"cannot load object at {debug_path!r}, as type "
-                             f"{get_package_path!r} has not attribute from_jaxon")
+                             f"{get_qualified_name!r} has not attribute from_jaxon")
     return jaxon
 
 
