@@ -195,7 +195,11 @@ def _store_jaxon_atom_value(group, value, group_key):
 
 
 def _is_simple_atom(atom):
-    return isinstance(atom.value, str) and atom.data is None
+    """A simple atom has no additional data and is therefore fully represented
+    by it's value that must be a string. Furthermore, the value cannot contain
+    null chars, so that the value can be used as a group or attribute or dataset
+    key in the hd5f file."""
+    return isinstance(atom.value, str) and atom.data is None and "\0" not in atom.value
 
 
 def _store_jaxon_atom_data(group, data, group_key):
