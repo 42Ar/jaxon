@@ -45,6 +45,12 @@ class CustomTypeReturnCustom:
     def to_jaxon(self):
         return self.obj
 
+    def __eq__(self, other):
+        return self.obj == other
+
+    def __hash__(self):
+        return hash(self.obj)
+
 
 class RoundtripTests(unittest.TestCase):
     def do_roundtrip(self, pytree, exact_python_numeric_types, allow_dill=False, downcast_to_base_types=None):
@@ -184,7 +190,6 @@ class RoundtripTests(unittest.TestCase):
         self.assertEqual(type(pytree["return_custom"]), CustomTypeReturnCustom)
         self.assertEqual(type(pytree["return_custom"].obj), CustomTypeReturnDict)
 
-
     def test_single_big_attr_value(self):
         pytree = self.rand_string(42, 1000000)
         self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
@@ -200,10 +205,15 @@ class RoundtripTests(unittest.TestCase):
             234: 5,
             (34, 234): 8,
             "sfddf": "dfs",
-            #CustomTypeReturnCustom("sdkhbfhbkd"): "fdsdf"
+
+            # the reason why this works out of the box
+            # is because the return value of jaxon type
+            # can never be a simple atom (because it is a container)
+            # and always must create a group
+            CustomTypeReturnCustom((324, 34)): 24
         }
         r = self.do_roundtrip(pytree, True)
-        self.assertTrue(pytree == r)
+        self.assertEqual(pytree, r)
 
 class ErrorBranchTests(unittest.TestCase):
     def trigger_circular_reference_exception(self):
