@@ -222,6 +222,15 @@ class RoundtripTests(unittest.TestCase):
         r = self.do_roundtrip(pytree, True)
         self.assertEqual(pytree, r)
 
+    def test_single_big_key_value(self):
+        pytree = {self.rand_string(42, 1000000), "val"}
+        self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
+
+    def test_multi_big_key_value(self):
+        pytree = {self.rand_string(i, 100000): i for i in range(10)}
+        self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
+
+
 class ErrorBranchTests(unittest.TestCase):
     def trigger_circular_reference_exception(self):
         pytree = {}
