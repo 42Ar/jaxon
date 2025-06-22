@@ -111,7 +111,7 @@ def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=
         group.attrs[name] = byte_buffer_type
         return
 
-    # handle container types
+    # handle container types first
     if parent_objects is None:
         parent_objects = [pytree]  # root node
     elif any(pytree is p for p in parent_objects):
@@ -126,6 +126,7 @@ def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=
         attr_value = "#" + get_qualified_name(pytree) + attr_value
         pytree = pytree.to_jaxon()
         parent_objects += [pytree]
+    
     container_type = _base_type_name(pytree, (list, tuple, dict, set, frozenset), downcast_to_base_types)
     if container_type is not None:
         attr_value = container_type + attr_value
@@ -141,8 +142,12 @@ def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=
                          py_to_np_types, parent_objects, f"{debug_path}({i})")
         group.attrs[name] = attr_value
         return
+    if used_to_jaxon:
+        raise TypeError(f"Object at {debug_path!r} is not a valid jaxon container type; it was "
+                         "returned by a to_jaxon method, but is not an instance of dict, list, "
+                         "tuple, set or frozenset or another object with a to_jaxon method.")
 
-    # use dill for any other objects if enabled
+    # use dill for any other types if enabled
     attr_value = "!" + get_qualified_name(pytree) + attr_value  # the '!' denotes that the object is serialized
     debug_path += f"[{attr_value}]"
     if allow_dill:
@@ -153,11 +158,6 @@ def to_jaxon(pytree, group, name=JAXON_ROOT_NAME, allow_dill=False, dill_kwargs=
         group.create_dataset(name, data=np.frombuffer(pybytes, dtype=np.uint8))
         group.attrs[name] = attr_value
         return
-    if used_to_jaxon:
-        raise TypeError(f"Object at {debug_path!r} is not a valid jaxon container type; it was "
-                         "returned by a to_jaxon method, but is not an instance of dict, list, "
-                         "tuple or another object with a to_jaxon method. It can be serialized "
-                         "anyway if allow_dill is set to True.")
     raise TypeError(f"Object at {debug_path!r} is not a valid jaxon type, but it can be "
                      "serialized if allow_dill is set to True.")
 
@@ -203,6 +203,16 @@ def from_jaxon(group, name, allow_dill=False, dill_kwargs=None, debug_path=""):
     if val == "jax.ndarray":
         return jnp.array(group[name][()])
 
+    # handle serialized types
+    if val[0] == "!":
+        if allow_dill:
+            if dill_kwargs is None:
+                dill_kwargs = {}
+            return dill.loads(group[name][()], **dill_kwargs)
+        else:
+            raise ValueError(f"cannot load serialized object at {debug_path!r}, "
+                              "as allow_dill=False")
+
     # handle container types
     debug_path = f"{debug_path}[{val}]"
     types = val.split("#")
@@ -220,14 +230,6 @@ def from_jaxon(group, name, allow_dill=False, dill_kwargs=None, debug_path=""):
             jaxon = set(jaxon)
         if types[0] == "frozenset":
             jaxon = frozenset(jaxon)
-    elif types[0][0] == "!":
-        if allow_dill:
-            if dill_kwargs is None:
-                dill_kwargs = {}
-            jaxon = dill.loads(group[name][()], **dill_kwargs)
-        else:
-            raise ValueError(f"cannot load serialized object at {debug_path!r}, "
-                              "as allow_dill=False")
     else:
         raise ValueError(f"type of object at {debug_path!r} not understood")
     for qualified_name in types[1:]:
