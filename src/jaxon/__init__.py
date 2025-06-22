@@ -93,7 +93,7 @@ def _decode_string(buffer):
     return buffer.decode("utf-8")
 
 
-def to_jaxon(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types: tuple = tuple(),
+def _to_atom(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types: tuple = tuple(),
              py_to_np_types: tuple = tuple(), parent_objects=None, debug_path="") -> JaxonAtom:
     # handle primitive scalar types
     if pytree is None:
@@ -157,15 +157,15 @@ def to_jaxon(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types:
         if isinstance(pytree, dict):
             data = JaxonDict()
             for i, (dict_key, dict_value) in enumerate(pytree.items()):
-                key_atom = to_jaxon(dict_key, allow_dill, dill_kwargs, downcast_to_base_types,
+                key_atom = _to_atom(dict_key, allow_dill, dill_kwargs, downcast_to_base_types,
                                     py_to_np_types, parent_objects, f"{debug_path}.key({i})")
-                value_atom = to_jaxon(dict_value, allow_dill, dill_kwargs, downcast_to_base_types,
+                value_atom = _to_atom(dict_value, allow_dill, dill_kwargs, downcast_to_base_types,
                                       py_to_np_types, parent_objects, f"{debug_path}.{key_atom.value}")
                 data.data.append((key_atom, value_atom))
         else:
             data = JaxonList()
             for i, item in enumerate(pytree):
-                item_atom = to_jaxon(item, allow_dill, dill_kwargs, downcast_to_base_types,
+                item_atom = _to_atom(item, allow_dill, dill_kwargs, downcast_to_base_types,
                                      py_to_np_types, parent_objects, f"{debug_path}({i})")
                 data.data.append(item_atom)
         return JaxonAtom(value, data)
@@ -185,7 +185,7 @@ def to_jaxon(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types:
                      "serialized if allow_dill is set to True.")
 
 
-def _store_jaxon_atom_value(group, value, group_key):
+def _store_atom_value(group, value, group_key):
     if isinstance(value, str):
         group.attrs[group_key] = _encode_string(value)
     elif isinstance(value, (*JAXON_PY_NUMERIC_TYPES, *JAXON_NP_NUMERIC_TYPES)):
@@ -202,7 +202,7 @@ def _is_simple_atom(atom):
     return isinstance(atom.value, str) and atom.data is None and "\0" not in atom.value
 
 
-def _store_jaxon_atom_data(group, data, group_key):
+def _store_atom_data(group, data, group_key):
     if isinstance(data, JaxonDict):
         sub_group = group.create_group(group_key, track_order=True)
         for i, (key_atom, value_atom) in enumerate(data.data):
@@ -211,22 +211,22 @@ def _store_jaxon_atom_data(group, data, group_key):
             else:
                 group_key_of_value = f"{JAXON_DICT_VALUE}({i})"
                 group_key_of_key = f"{JAXON_DICT_KEY}({i})"
-                _store_jaxon_atom(sub_group, key_atom, group_key_of_key)
-            _store_jaxon_atom(sub_group, value_atom, group_key_of_value)
+                _store_atom(sub_group, key_atom, group_key_of_key)
+            _store_atom(sub_group, value_atom, group_key_of_value)
     elif isinstance(data, JaxonList):
         sub_group = group.create_group(group_key, track_order=True)
         for i, item_atom in enumerate(data.data):
-            _store_jaxon_atom(sub_group, item_atom, str(i))
+            _store_atom(sub_group, item_atom, str(i))
     elif isinstance(data, (np.ndarray, memoryview)):
         group.create_dataset(group_key, data=data)
     else:
         assert False, f"unexpected internal jaxon data type {type(data)!r}"
 
 
-def _store_jaxon_atom(group, atom, key):
-    _store_jaxon_atom_value(group, atom.value, key)
+def _store_atom(group, atom, key):
+    _store_atom_value(group, atom.value, key)
     if atom.data is not None:
-        _store_jaxon_atom_data(group, atom.data, key)
+        _store_atom_data(group, atom.data, key)
 
 
 def _simple_atom_from_value(value):
@@ -348,9 +348,9 @@ def save(path, pytree, exact_python_numeric_types=True, downcast_to_base_types=N
         downcast_to_base_types = tuple()
     else:
         downcast_to_base_types = tuple(downcast_to_base_types)
-    root_atom = to_jaxon(pytree, allow_dill, dill_kwargs, downcast_to_base_types, py_to_np_types)
+    root_atom = _to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types, py_to_np_types)
     with h5py.File(path, 'w', track_order=True) as file:
-        _store_jaxon_atom(file, root_atom, JAXON_ROOT_NAME)
+        _store_atom(file, root_atom, JAXON_ROOT_NAME)
 
 
 def load(path, allow_dill=False, dill_kwargs=None):
