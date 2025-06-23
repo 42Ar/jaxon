@@ -15,8 +15,10 @@ import unittest
 from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
+import h5py
 from .test_util import tree_equal
 from jaxon import load, save, CircularPytreeException, JAXON_NP_NUMERIC_TYPES
+from jaxon import JaxonStorageHints, JAXON_ROOT_GROUP_KEY
 
 
 class TestObjectForDill:
@@ -235,7 +237,8 @@ class RoundtripTests(unittest.TestCase):
             # is because the return value of jaxon type
             # can never be a simple atom (because it is a container)
             # and always must create a group
-            CustomTypeReturnCustom((324, 34)): 24
+            CustomTypeReturnCustom((324, 34)): 24,
+            CustomDataclass(234, "sdf"): "oasfd"
         }
         r = self.do_roundtrip(pytree, True)
         self.assertEqual(pytree, r)
@@ -271,3 +274,14 @@ class ErrorBranchTests(unittest.TestCase):
 
     def test_unsupported_object(self):
         self.assertRaises(TypeError, self.trigger_unsupported_type_exception)
+
+
+class IntrospectiveTests(unittest.TestCase):
+    def test_store_in_dataclass(self):
+        pytree = {"attribute": np.zeros(10), "dataset": np.zeros(10)}
+        with tempfile.TemporaryFile() as fp:
+            save(fp, pytree, storage_hints=[(pytree["dataset"], JaxonStorageHints(True))])
+            with h5py.File(fp, 'r') as file:
+                self.assertIn("'dataset'", list(file[JAXON_ROOT_GROUP_KEY]))
+                self.assertEqual(1, len(list(file[JAXON_ROOT_GROUP_KEY])))
+                self.assertNotIn("'attribute'", list(file[JAXON_ROOT_GROUP_KEY]))
