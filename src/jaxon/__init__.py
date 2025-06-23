@@ -38,19 +38,28 @@ class CircularPytreeException(Exception):
 
 
 @dataclass
-class JaxonAtom:
-    value: Any
-    data: Any = None
-
-
-@dataclass
 class JaxonDict:
-    data: list[tuple[JaxonAtom, JaxonAtom]] = field(default_factory=list)
+    data: list[tuple['JaxonAtom', 'JaxonAtom']] = field(default_factory=list)
 
 
 @dataclass
 class JaxonList:
-    data: list[JaxonAtom] = field(default_factory=list)
+    data: list['JaxonAtom'] = field(default_factory=list)
+
+
+JAXON_TYPES = (JaxonDict, JaxonList, *JAXON_PY_NUMERIC_TYPES, JAXON_NP_NUMERIC_TYPES, memoryview, np.ndarray, str)
+
+
+@dataclass
+class JaxonAtom:
+    data: Any
+    typehint: str = None
+
+    def _is_simple(self) -> bool:
+        """A simple atom encodes the data and typehint only into in the data field
+        which must be a str that does not contain null chars. This means that
+        simple atoms can be used as group or attribute keys in the hd5f file."""
+        return self.typehint is None and type(self.data) is str and "\0" not in self.data
 
 
 def _get_qualified_name(obj):
@@ -145,11 +154,11 @@ def _to_atom(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types:
     other_repr_type = _base_type_name(pytree, (range, slice), downcast_to_base_types)
     if other_repr_type is not None:
         # collision with a type hint
-        value = repr(pytree)
+        typehint = repr(pytree)
         if isinstance(pytree, (range, slice)):
             # remove unnecessary spaces which would cause parsing to fail
-            value = value.replace(" ", "")
-        return JaxonAtom(value)
+            typehint = typehint.replace(" ", "")
+        return JaxonAtom(typehint)
     str_type = _base_type_name(pytree, (str,), downcast_to_base_types)
     if str_type is not None:
         # add qoutation marks to avoid possible naming collision with type hint
@@ -157,12 +166,12 @@ def _to_atom(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types:
 
     # handle arrays
     if _base_type_name(pytree, (JAXON_JAX_ARRAY_TYPE,), downcast_to_base_types):
-        return JaxonAtom("jax.Array", np.array(pytree))
+        return JaxonAtom(np.array(pytree), "jax.Array")
     if _base_type_name(pytree, (np.ndarray,), downcast_to_base_types):
-        return JaxonAtom("numpy.ndarray", pytree)
+        return JaxonAtom(pytree, "numpy.ndarray")
     byte_buffer_type = _base_type_name(pytree, (bytes, bytearray, memoryview), downcast_to_base_types)
     if byte_buffer_type is not None:
-        return JaxonAtom(byte_buffer_type, pytree if isinstance(pytree, memoryview) else memoryview(pytree))
+        return JaxonAtom(pytree if isinstance(pytree, memoryview) else memoryview(pytree), byte_buffer_type)
 
     # handle container types first
     if parent_objects is None:
@@ -172,29 +181,29 @@ def _to_atom(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types:
     else:
         parent_objects = parent_objects + [pytree]  # Descend. Need new list of parents here.
     is_custom_type = False
-    value = ""
+    typehint = ""
     container_type = _base_type_name(pytree, JAXON_CONTAINER_TYPES, downcast_to_base_types)
     while container_type is None:
         # the '#' indicates that the class uses the to_jaxon/from_jaxon interface
-        new_value = "#" + _get_qualified_name(pytree) + value
+        new_typehint = "#" + _get_qualified_name(pytree) + typehint
         success, new_pytree = _custom_obj_to_container(pytree)
         if not success:
             break
-        value = new_value
+        typehint = new_typehint
         pytree = new_pytree
         is_custom_type = True
         parent_objects += [pytree]
         container_type = _base_type_name(pytree, JAXON_CONTAINER_TYPES, downcast_to_base_types)
     if container_type is not None:
-        value = container_type + value
-        debug_path += f"[{value}]"
+        typehint = container_type + typehint
+        debug_path += f"[{typehint}]"
         if isinstance(pytree, dict):
             data = JaxonDict()
             for i, (dict_key, dict_value) in enumerate(pytree.items()):
                 key_atom = _to_atom(dict_key, allow_dill, dill_kwargs, downcast_to_base_types,
                                     py_to_np_types, parent_objects, f"{debug_path}.key({i})")
                 value_atom = _to_atom(dict_value, allow_dill, dill_kwargs, downcast_to_base_types,
-                                      py_to_np_types, parent_objects, f"{debug_path}.{key_atom.value}")
+                                      py_to_np_types, parent_objects, f"{debug_path}.{key_atom.typehint}")
                 data.data.append((key_atom, value_atom))
         else:
             data = JaxonList()
@@ -202,65 +211,57 @@ def _to_atom(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types:
                 item_atom = _to_atom(item, allow_dill, dill_kwargs, downcast_to_base_types,
                                      py_to_np_types, parent_objects, f"{debug_path}({i})")
                 data.data.append(item_atom)
-        return JaxonAtom(value, data)
+        return JaxonAtom(data, typehint)
     if is_custom_type:
         raise TypeError(f"Object at {debug_path!r} is not a valid jaxon container type; it was "
                          "returned by a custom type conversion, but is not an instance of dict, "
                          "list, tuple, set or frozenset or another object that can be converted.")
 
     # use dill for any other types if enabled
-    value = "!" + _get_qualified_name(pytree) + value  # the '!' denotes that the object is serialized
-    debug_path += f"[{value}]"
+    typehint = "!" + _get_qualified_name(pytree) + typehint  # the '!' denotes that the object is serialized
+    debug_path += f"[{typehint}]"
     if allow_dill:
         if dill_kwargs is None:
             dill_kwargs = {}
-        return JaxonAtom(value, memoryview(dill.dumps(pytree, **dill_kwargs)))
+        return JaxonAtom(memoryview(dill.dumps(pytree, **dill_kwargs)), typehint)
     raise TypeError(f"Object at {debug_path!r} is not a valid jaxon type, but it can be "
                      "serialized if allow_dill is set to True.")
 
 
-def _store_atom_value(group, value, group_key):
-    if isinstance(value, str):
-        group.attrs[group_key] = _encode_string(value)
-    elif isinstance(value, (*JAXON_PY_NUMERIC_TYPES, *JAXON_NP_NUMERIC_TYPES)):
-        group.attrs[group_key] = value
+def _store_in_attrib(group, data, group_key):
+    if isinstance(data, str):
+        group.attrs[group_key] = _encode_string(data)
+    elif isinstance(data, (*JAXON_PY_NUMERIC_TYPES, *JAXON_NP_NUMERIC_TYPES, np.ndarray,
+                           memoryview)):
+        group.attrs[group_key] = data
     else:
-        assert False, f"unexpected internal jaxon value type {type(value)!r}"
+        assert False, f"unexpected internal jaxon data type {type(data)!r}"
 
 
-def _is_simple_atom(atom):
-    """A simple atom has no additional data and is therefore fully represented
-    by it's value that must be a string. Furthermore, the value cannot contain
-    null chars, so that the value can be used as a group or attribute or dataset
-    key in the hd5f file."""
-    return isinstance(atom.value, str) and atom.data is None and "\0" not in atom.value
-
-
-def _store_atom_data(group, data, group_key):
-    if isinstance(data, JaxonDict):
+def _store_atom(group, atom, group_key):
+    if atom.typehint is None:
+        _store_in_attrib(group, atom.data, group_key)
+    elif isinstance(atom.data, JaxonDict):
         sub_group = group.create_group(group_key, track_order=True)
-        for i, (key_atom, value_atom) in enumerate(data.data):
-            if _is_simple_atom(key_atom):
-                group_key_of_value = key_atom.value
+        for i, (key_atom, value_atom) in enumerate(atom.data.data):
+            if key_atom._is_simple():
+                group_key_of_value = key_atom.data
             else:
                 group_key_of_value = f"{JAXON_DICT_VALUE}({i})"
                 group_key_of_key = f"{JAXON_DICT_KEY}({i})"
                 _store_atom(sub_group, key_atom, group_key_of_key)
             _store_atom(sub_group, value_atom, group_key_of_value)
-    elif isinstance(data, JaxonList):
+        _store_in_attrib(group, atom.typehint, group_key)
+    elif isinstance(atom.data, JaxonList):
         sub_group = group.create_group(group_key, track_order=True)
-        for i, item_atom in enumerate(data.data):
+        for i, item_atom in enumerate(atom.data.data):
             _store_atom(sub_group, item_atom, str(i))
-    elif isinstance(data, (np.ndarray, memoryview)):
-        group.create_dataset(group_key, data=data)
+        _store_in_attrib(group, atom.typehint, group_key)
+    elif isinstance(atom.data, (np.ndarray, memoryview)):
+        _store_in_attrib(group, atom.typehint, group_key)
+        group.create_dataset(group_key, data=atom.data)
     else:
-        assert False, f"unexpected internal jaxon data type {type(data)!r}"
-
-
-def _store_atom(group, atom, key):
-    _store_atom_value(group, atom.value, key)
-    if atom.data is not None:
-        _store_atom_data(group, atom.data, key)
+        assert False, f"unexpected internal jaxon data type {type(atom.data)!r}"
 
 
 def _simple_atom_from_value(value):
