@@ -76,7 +76,7 @@ class RoundtripTests(unittest.TestCase):
 
     def rand_string(self, seed, n):
         random.seed(seed)
-        special = ["'", '"', "\0", "\r", "\n", "ä", "ö", "ü", "ß"]
+        special = ["'", '"', "\0", "\r", "\n", "ä", "ö", "ü", "ß", ":", "\\"]
         return "".join(random.choices(list(string.ascii_uppercase) + special, k=n))
 
     def test_simple_types(self):
@@ -91,6 +91,10 @@ class RoundtripTests(unittest.TestCase):
             "string_with_zeros": '\0sfddf\0asdf',
             "string_with_trailing_zeros": '\0sfddf\0asdf\0\0',
             "string_with_trailing_zeros_and_non_ascii": '\0sfddf\0asdöüüäöüöäöüöüf\0\0'*5,
+            "string_with_colons_1": ":sdffds:asd:::ads:",
+            "string_with_colons_2": ":",
+            ":": "234",
+            "sdf:sdffds": "34",
             "'": "",
             '"': "",
             "\0sfddf\0asdf": "",
