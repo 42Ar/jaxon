@@ -10,7 +10,7 @@ from typing import Any
 from dataclasses import dataclass, field
 import dataclasses
 import importlib
-import jax.numpy as jnp
+import jax
 import numpy as np
 import h5py
 import dill
@@ -29,6 +29,7 @@ JAXON_ELLIPSIS = "Ellipsis"
 JAXON_DICT_KEY = "key"
 JAXON_DICT_VALUE = "value"
 JAXON_CONTAINER_TYPES = (list, tuple, dict, set, frozenset)
+JAXON_JAX_ARRAY_TYPE = type(jax.numpy.array([]))  # get the type of a jax array (in a version-independent way)
 
 
 class CircularPytreeException(Exception):
@@ -155,12 +156,10 @@ def _to_atom(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types:
         return JaxonAtom("'" + pytree + "'")
 
     # handle arrays
-    array_type = _base_type_name(pytree, (np.ndarray, jnp.ndarray), downcast_to_base_types)
-    if array_type is not None and pytree.dtype in JAXON_NP_NUMERIC_TYPES:
-        if isinstance(pytree, jnp.ndarray):
-            return JaxonAtom("jax.numpy.ndarray", np.array(pytree))
-        else:
-            return JaxonAtom("numpy.ndarray", pytree)
+    if _base_type_name(pytree, (JAXON_JAX_ARRAY_TYPE,), downcast_to_base_types):
+        return JaxonAtom("jax.Array", np.array(pytree))
+    if _base_type_name(pytree, (np.ndarray,), downcast_to_base_types):
+        return JaxonAtom("numpy.ndarray", pytree)
     byte_buffer_type = _base_type_name(pytree, (bytes, bytearray, memoryview), downcast_to_base_types)
     if byte_buffer_type is not None:
         return JaxonAtom(byte_buffer_type, pytree if isinstance(pytree, memoryview) else memoryview(pytree))
@@ -315,8 +314,8 @@ def _load(group, group_key, allow_dill=False, dill_kwargs=None, debug_path=""):
         return memoryview(group[group_key][()])
     if value == "numpy.ndarray":
         return group[group_key][()]
-    if value == "jax.numpy.ndarray":
-        return jnp.array(group[group_key][()])
+    if value == "jax.Array":
+        return jax.numpy.array(group[group_key][()])
 
     # handle serialized types
     if value[0] == "!":
@@ -389,3 +388,4 @@ def save(path, pytree, exact_python_numeric_types=True, downcast_to_base_types=N
 def load(path, allow_dill=False, dill_kwargs=None):
     with h5py.File(path, 'r') as file:
         return _load(file, JAXON_ROOT_NAME, allow_dill=allow_dill, dill_kwargs=dill_kwargs)
+

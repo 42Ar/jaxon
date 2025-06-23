@@ -13,9 +13,10 @@ import random
 import string
 import unittest
 from dataclasses import dataclass
+import jax.numpy as jnp
 import numpy as np
 from .test_util import tree_equal
-from jaxon import load, save, JAXON_NP_NUMERIC_TYPES, CircularPytreeException
+from jaxon import load, save, CircularPytreeException, JAXON_NP_NUMERIC_TYPES
 
 
 class TestObjectForDill:
@@ -126,11 +127,14 @@ class RoundtripTests(unittest.TestCase):
         for exact_python_numeric_types in (False, True):
             self.run_roundtrip_test(pytree, exact_python_numeric_types)
 
-    def test_numpy_ararys(self):
+    def test_ararys(self):
         pytree = {
             "int32": np.arange(100, dtype=np.int32),
             "int64": np.arange(100, dtype=np.int64),
             "other": [np.zeros(100, dtype=scalar_type) for scalar_type in JAXON_NP_NUMERIC_TYPES],
+            "jax": jnp.zeros((23, 21)),
+            "jax2": jnp.array((23, 21))
+
         }
         for exact_python_numeric_types in (False, True):
             self.run_roundtrip_test(pytree, exact_python_numeric_types)
