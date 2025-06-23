@@ -1,0 +1,60 @@
+# Byte-compiled / compiled Python files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.env/
+.venv/
+venv/
+ENV/
+env/
+pip-selfcheck.json
+
+# Installer/build output
+build/
+dist/
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+
+# Editable install link
+*.egg-link
+
+# Python cache and logs
+*.log
+*.pot
+*.pyc
+
+# Unit test / coverage
+htmlcov/
+.coverage
+.cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.tox/
+pytest_cache/
+
+# mypy / static analysis
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# VSCode / PyCharm / IDEs
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# macOS
+.DS_Store
+
+# Linux
+*~

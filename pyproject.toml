@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jaxon"
+version = "1.0.0"
+description = "Save pytrees efficiently in hdf5 files"
+authors = [{ name = "Frank Hermann", email = "frank.c.Hermann@googlemail.com" }]
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+dependencies = ["numpy", "jax", "h5py", "dill"]
+
+[project.urls]
+Homepage = "https://github.com/42Ar/jaxon"
+
+[tool.setuptools.packages.find]
+where = ["src"]
