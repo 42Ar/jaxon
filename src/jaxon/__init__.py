@@ -146,6 +146,12 @@ def to_atom(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types: 
     return JaxonAtom(atom.data, atom.typehint, id(pytree))
 
 
+def _key_to_debugstring(dict_key):
+    if isinstance(dict_key, (str, int, float, bool, complex)):
+        return repr(dict_key)
+    return f"{(i)}"
+
+
 def _to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types, py_to_np_types,
              parent_objects, debug_path) -> JaxonAtom:
     # handle simple scalar(-like) types
@@ -217,8 +223,9 @@ def _to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types, py_to_np_t
             for i, (dict_key, dict_value) in enumerate(pytree.items()):
                 key_atom = to_atom(dict_key, allow_dill, dill_kwargs, downcast_to_base_types,
                                    py_to_np_types, parent_objects, f"{debug_path}.key({i})")
+                dbgstr = f"{debug_path}.{_key_to_debugstring(dict_key)}"
                 value_atom = to_atom(dict_value, allow_dill, dill_kwargs, downcast_to_base_types,
-                                     py_to_np_types, parent_objects, f"{debug_path}.{key_atom.typehint}")
+                                     py_to_np_types, parent_objects, dbgstr)
                 data.data.append((key_atom, value_atom))
         else:
             data = JaxonList()
@@ -392,20 +399,23 @@ def _load(group, group_key_and_th, allow_dill=False, dill_kwargs=None, debug_pat
     if types[0] == "dict":
         sub_group = group[group_key_and_th]
         pytree = {}
-        for sub_group_key in sub_group.attrs:
+        for i, sub_group_key in enumerate(sub_group.attrs):
             if sub_group_key.startswith("value"):
                 continue  # loaded if corresponing key is read
             if sub_group_key.startswith("key"):
                 assert sub_group_key[len("key")] == "(" and sub_group_key[-1] == ")"
                 group_key_of_value = f"value({int(sub_group_key[len('key')+1:-1])})"
-                key = _load(sub_group, sub_group_key, allow_dill, dill_kwargs, f"{debug_path}.{sub_group_key}")
+                dbgstr = f"{debug_path}.key({i})"
+                dict_key = _load(sub_group, sub_group_key, allow_dill, dill_kwargs, dbgstr)
             else:
                 # assume that the key is a simple atom (fully represented by sub_group_key)
-                sub_group_key_data, _ = _get_group_key_and_typehint(sub_group_key)  # discard typehint
-                is_simple_atom, key = _simple_atom_from_value(sub_group_key_data)
+                sub_group_key_data, _ = _get_group_key_and_typehint(sub_group_key)
+                is_simple_atom, dict_key = _simple_atom_from_value(sub_group_key_data)
                 assert is_simple_atom, f"expected simple atom for sub group key {sub_group_key!r}"
                 group_key_of_value = sub_group_key
-            pytree[key] = _load(sub_group, group_key_of_value, allow_dill, dill_kwargs, f"{debug_path}.{key}")
+            dbgstr = f"{debug_path}.{_key_to_debugstring(dict_key)}"
+            pytree[dict_key] = _load(sub_group, group_key_of_value, allow_dill,
+                                     dill_kwargs, dbgstr)
     elif types[0] in ("list", "tuple", "set", "frozenset"):
         sub_group = group[group_key_and_th]
         pytree = [_load(sub_group, sub_group_key, allow_dill, dill_kwargs, f"{debug_path}({i})")
