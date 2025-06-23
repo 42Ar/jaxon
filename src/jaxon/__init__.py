@@ -126,7 +126,7 @@ def _custom_obj_to_container(pytree):
 def _container_to_dataclass(container, instance):
     assert type(container) is dict, "expected dict container for dataclass"
     for field_name, field_value in container.items():
-        setattr(instance, field_name, field_value)
+        object.__setattr__(instance, field_name, field_value)
 
 
 def _container_to_custom_obj(container, instance):
