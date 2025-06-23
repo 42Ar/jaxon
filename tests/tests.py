@@ -241,7 +241,7 @@ class RoundtripTests(unittest.TestCase):
         self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
 
     def test_custom_dataclass(self):
-        pytree = {CustomDataclass(213, "afsddf"): CustomDataclass(CustomDataclass(21, "d45"), "jkk")}
+        pytree = {CustomDataclass(213): CustomDataclass(CustomDataclass(21), "jkk")}
         self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
 
 
