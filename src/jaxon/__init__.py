@@ -8,6 +8,7 @@ Frank Hermann
 
 from typing import Any
 from dataclasses import dataclass, field
+import dataclasses
 import importlib
 import jax.numpy as jnp
 import numpy as np
@@ -27,6 +28,7 @@ JAXON_NONE = "None"
 JAXON_ELLIPSIS = "Ellipsis"
 JAXON_DICT_KEY = "key"
 JAXON_DICT_VALUE = "value"
+JAXON_CONTAINER_TYPES = (list, tuple, dict, set, frozenset)
 
 
 class CircularPytreeException(Exception):
@@ -93,6 +95,34 @@ def _decode_string(buffer):
     return buffer.decode("utf-8")
 
 
+def _dataclass_to_container(instance):
+    return {field.name: getattr(instance, field.name) for field in dataclasses.fields(instance)}
+
+
+def _custom_obj_to_container(pytree):
+    if hasattr(pytree, "to_jaxon"):
+        return True, pytree.to_jaxon()
+    if dataclasses.is_dataclass(pytree):
+        return True, _dataclass_to_container(pytree)
+    return False, None
+
+
+def _container_to_dataclass(container, instance):
+    assert type(container) is dict, "expected dict container for dataclass"
+    for field_name, field_value in container.items():
+        setattr(instance, field_name, field_value)
+
+
+def _container_to_custom_obj(container, instance):
+    if hasattr(instance, "from_jaxon"):
+        instance.from_jaxon(container)
+    elif dataclasses.is_dataclass(instance):
+        _container_to_dataclass(container, instance)
+    else:
+        return False
+    return True
+
+
 def _to_atom(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types: tuple = tuple(),
              py_to_np_types: tuple = tuple(), parent_objects=None, debug_path="") -> JaxonAtom:
     # handle primitive scalar types
@@ -142,15 +172,20 @@ def _to_atom(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types:
         raise CircularPytreeException(f"detected circular reference in pytree at {debug_path!r}")
     else:
         parent_objects = parent_objects + [pytree]  # Descend. Need new list of parents here.
-    used_to_jaxon = False
+    is_custom_type = False
     value = ""
-    while hasattr(pytree, "to_jaxon"):
-        used_to_jaxon = True
+    container_type = _base_type_name(pytree, JAXON_CONTAINER_TYPES, downcast_to_base_types)
+    while container_type is None:
         # the '#' indicates that the class uses the to_jaxon/from_jaxon interface
-        value = "#" + _get_qualified_name(pytree) + value
-        pytree = pytree.to_jaxon()
+        new_value = "#" + _get_qualified_name(pytree) + value
+        success, new_pytree = _custom_obj_to_container(pytree)
+        if not success:
+            break
+        value = new_value
+        pytree = new_pytree
+        is_custom_type = True
         parent_objects += [pytree]
-    container_type = _base_type_name(pytree, (list, tuple, dict, set, frozenset), downcast_to_base_types)
+        container_type = _base_type_name(pytree, JAXON_CONTAINER_TYPES, downcast_to_base_types)
     if container_type is not None:
         value = container_type + value
         debug_path += f"[{value}]"
@@ -169,10 +204,10 @@ def _to_atom(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types:
                                      py_to_np_types, parent_objects, f"{debug_path}({i})")
                 data.data.append(item_atom)
         return JaxonAtom(value, data)
-    if used_to_jaxon:
+    if is_custom_type:
         raise TypeError(f"Object at {debug_path!r} is not a valid jaxon container type; it was "
-                         "returned by a to_jaxon method, but is not an instance of dict, list, "
-                         "tuple, set or frozenset or another object with a to_jaxon method.")
+                         "returned by a custom type conversion, but is not an instance of dict, "
+                         "list, tuple, set or frozenset or another object that can be converted.")
 
     # use dill for any other types if enabled
     value = "!" + _get_qualified_name(pytree) + value  # the '!' denotes that the object is serialized
@@ -311,7 +346,6 @@ def _load(group, group_key, allow_dill=False, dill_kwargs=None, debug_path=""):
                 assert is_simple_atom, f"expected simple atom for sub group key {sub_group_key!r}"
                 group_key_of_value = sub_group_key
             pytree[key] = _load(sub_group, group_key_of_value, allow_dill, dill_kwargs, f"{debug_path}.{key}")
-        return pytree
     elif types[0] in ("list", "tuple", "set", "frozenset"):
         sub_group = group[group_key]
         pytree = [_load(sub_group, sub_group_key, allow_dill, dill_kwargs, f"{debug_path}({i})")
@@ -326,10 +360,9 @@ def _load(group, group_key, allow_dill=False, dill_kwargs=None, debug_path=""):
         raise ValueError(f"type of object at {debug_path!r} not understood")
     for qualified_name in types[1:]:
         instance = _create_instance(qualified_name)
-        if hasattr(instance, "from_jaxon"):
-            instance.from_jaxon(pytree)
-            pytree = instance
-        else:
+        success = _container_to_custom_obj(pytree, instance)
+        pytree = instance
+        if not success:
             raise ValueError(f"cannot load object at {debug_path!r}, as type "
                              f"{_get_qualified_name!r} has not attribute from_jaxon")
     return pytree

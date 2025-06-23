@@ -7,12 +7,13 @@ Author
 ------
 Frank Hermann
 """
-
+from typing import Any
 import tempfile
 import random
 import string
-import numpy as np
 import unittest
+from dataclasses import dataclass
+import numpy as np
 from .test_util import tree_equal
 from jaxon import load, save, JAXON_NP_NUMERIC_TYPES, CircularPytreeException
 
@@ -50,6 +51,15 @@ class CustomTypeReturnCustom:
 
     def __hash__(self):
         return hash(self.obj)
+
+
+@dataclass
+class CustomDataclass:
+    mandatory: Any
+    optional: Any = 345774
+
+    def __hash__(self):
+        return hash((self.mandatory, self.optional))
 
 
 class RoundtripTests(unittest.TestCase):
@@ -228,6 +238,10 @@ class RoundtripTests(unittest.TestCase):
 
     def test_multi_big_key_value(self):
         pytree = {self.rand_string(i, 100000): i for i in range(10)}
+        self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
+
+    def test_custom_dataclass(self):
+        pytree = {CustomDataclass(213, "afsddf"): CustomDataclass(CustomDataclass(21, "d45"), "jkk")}
         self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
 
 
