@@ -8,6 +8,10 @@ version = "1.0.0"
 description = "Save pytrees efficiently in hdf5 files"
 authors = [{ name = "Frank Hermann", email = "frank.c.Hermann@googlemail.com" }]
 readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
 license-files = ["LICENSE"]
 keywords = ["JAX", "Serialization", "Equinox", "HDF5"]
 dependencies = ["numpy", "jax", "h5py", "dill"]
