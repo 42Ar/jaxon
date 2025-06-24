@@ -464,7 +464,7 @@ def _load(group, group_key_and_th, allow_dill=False, dill_kwargs=None, debug_pat
         pytree = {}
         for i, sub_group_key in enumerate(sub_group.attrs):
             if sub_group_key.startswith("value"):
-                continue  # loaded if corresponing key is read
+                continue  # loaded later when if corresponding key is read
             if sub_group_key.startswith("key"):
                 assert sub_group_key[len("key")] == "(" and sub_group_key[-1] == ")"
                 group_key_of_value = f"value({int(sub_group_key[len('key')+1:-1])})"
@@ -515,9 +515,10 @@ def save(path, pytree,
     Parameters
     ----------
     path :
-        The file path where the PyTree will be saved.
+        The file path where the pytree will be saved.
     pytree :
-        The PyTree object to be saved. Can contain nested structures of arrays, lists, dicts, etc.
+        The pytree object to be saved. Can contain nested structures of arrays, lists,
+        dicts, etc. (see README)
     exact_python_numeric_types : bool, default=True
         If False, the types int, float, bool and complex will be converted implicitly to
         np.int64, np.float64, np.bool and np.complex128 respectively and stored as the
@@ -526,10 +527,11 @@ def save(path, pytree,
         when loading.
     downcast_to_base_types : Iterable
         If a superclass of a supported base type is encountered in the pytree and is contained in
-        this Iterable, it is converted to and stored as the supported base type.
+        this Iterable, it is converted to and stored as the supported base type. This means that
+        it is also reconstructed as the supported base type when the file is loaded.
     py_to_np_types : Iterable
-        Apply the behavior of `exact_python_numeric_types` only to some of the types. If not `None`,
-        `exact_python_numeric_types` will be ignored.
+        Apply the behavior of `exact_python_numeric_types` only to the python types in the given
+        Iterable. If not `None`, `exact_python_numeric_types` will be ignored.
     allow_dill : bool, default=False
         Whether to allow `dill` for serializing unsupported objects.
     dill_kwargs : dict or None, optional
@@ -538,7 +540,7 @@ def save(path, pytree,
         A list of hints for how to store numpy/jax arrays, bytes, bytearray and memoryview
         objects. The first member must be a reference to an object in `pytree` and the second
         specifies the corresponding `JaxonStorageHints`. If the object is not found in
-        the pytree, the hint is ignored.
+        the pytree, the hint is silently ignored.
 
     Returns
     -------
@@ -578,27 +580,10 @@ def load(path, allow_dill: bool = False, dill_kwargs: dict | None = None):
     path : str or Path
         The file path from which to load the pytree.
     allow_dill : bool, default=False
-        Whether to allow loading objects serialized with `dill`.
-        If a serialized object is encountered and this argument is `False`,
-        an error is saved. 
+        Whether to allow loading objects serialized with `dill`. If a serialized object is
+        encountered and this argument is `False`, an error is raised. 
     dill_kwargs : dict or None, optional
         Extra keyword arguments passed to `dill.loads` if `allow_dill` is True.
-
-    Returns
-    -------
-    pytree : Any
-        The reconstructed PyTree object as originally saved.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the specified file does not exist.
-    TypeError
-        If the file contains unsupported types and `allow_dill` is False.
-    IOError
-        If the file cannot be read.
-    dill.UnpicklingError
-        If `dill` fails to deserialize the object (when used).
 
     Notes
     -----
