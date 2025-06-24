@@ -2,12 +2,15 @@
 test_util.py
 
 Provides tree_equal which is used during testing.
-Some of the functions are from the equinox package.
+Some of the functions are adapted copies from the
+equinox package by Patrick Kidger, which is MIT licensed.
 
 Author
 ------
 Frank Hermann
 """
+
+
 import jax.tree_util as jtu
 import jax
 import jax.numpy as jnp
@@ -38,7 +41,7 @@ def _array_equal(x, y, npi, rtol, atol):
 
 def tree_equal(*pytrees, typematch = False, rtol = 0.0, atol = 0.0):
     """Almost identical to equinox.tree_util.tree_equal but fixes a bug when comparing a
-    zero dimensional array to a python scalar with typematch == False"""
+    zero dimensional array to a python scalar with typematch = False."""
     flat, treedef = jtu.tree_flatten(pytrees[0])
     traced_out = True
     for pytree in pytrees[1:]:

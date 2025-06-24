@@ -7,6 +7,8 @@ Author
 ------
 Frank Hermann
 """
+
+
 from typing import Any
 import tempfile
 import random
@@ -31,7 +33,7 @@ class TestObjectForDill:
 class CustomTypeReturnDict:
     def __init__(self, a):
         self.a = a
-    
+
     def from_jaxon(self, jaxon):
         self.a = jaxon["a"]
 
@@ -42,7 +44,7 @@ class CustomTypeReturnDict:
 class CustomTypeReturnCustom:
     def __init__(self, obj):
         self.obj = obj
-    
+
     def from_jaxon(self, jaxon):
         self.obj = jaxon
 
@@ -66,7 +68,8 @@ class CustomDataclass:
 
 
 class RoundtripTests(unittest.TestCase):
-    def do_roundtrip(self, pytree, exact_python_numeric_types, allow_dill=False, downcast_to_base_types=None):
+    def do_roundtrip(self, pytree, exact_python_numeric_types, allow_dill=False,
+                     downcast_to_base_types=None):
         with tempfile.TemporaryFile() as fp:
             save(fp, pytree, exact_python_numeric_types=exact_python_numeric_types,
                  downcast_to_base_types=downcast_to_base_types, allow_dill=allow_dill)
@@ -74,7 +77,7 @@ class RoundtripTests(unittest.TestCase):
 
     def run_roundtrip_test(self, pytree, exact_python_numeric_types, allow_dill=False):
         loaded = self.do_roundtrip(pytree, exact_python_numeric_types, allow_dill)
-        self.assertTrue(tree_equal(loaded, pytree, typematch=exact_python_numeric_types, rtol=0, atol=0))
+        self.assertTrue(tree_equal(loaded, pytree, typematch=exact_python_numeric_types))
 
     def rand_string(self, seed, n):
         random.seed(seed)
@@ -89,7 +92,7 @@ class RoundtripTests(unittest.TestCase):
             "string": "string",
             "string_with_qoutation1": "'",
             "string_with_qoutation2": '"',
-            "string_with_qoutation2": '"\'',
+            "string_with_qoutation3": '"\'',
             "string_with_zeros": '\0sfddf\0asdf',
             "string_with_trailing_zeros": '\0sfddf\0asdf\0\0',
             "string_with_trailing_zeros_and_non_ascii": '\0sfddf\0asdöüüäöüöäöüöüf\0\0'*5,
@@ -100,7 +103,6 @@ class RoundtripTests(unittest.TestCase):
             "'": "",
             '"': "",
             "\0sfddf\0asdf": "",
-            "\0sfddf\0asdf\0\0": "",
             "\0sfddf\0asdf\0\0": "",
             "\0sfddf\0asdöüüäöüöäöüöüf\0\0": "",
             "öäööääööäöä": "",
@@ -113,7 +115,7 @@ class RoundtripTests(unittest.TestCase):
             "float64": np.float64(3465.34),
             "int32": np.int32(487),
             "scalars": [scalar_type(0) for scalar_type in JAXON_NP_NUMERIC_TYPES],
-            "bool": np.bool(3465.34),
+            "npbool": np.bool(3465.34),
             "complex128": np.complex128(123 + 32j),
             "key/with/slashes": {
                 "more/slahes": 5
@@ -172,14 +174,15 @@ class RoundtripTests(unittest.TestCase):
         self.assertEqual(type(out["float"]), np.float64)
         self.assertEqual(type(out["complex"]), np.complex128)
         self.assertEqual(type(out["bool"]), np.bool)
-    
+
     def test_type_downcast(self):
         class testint(int):
             pass
         class testint64(np.int64):
             pass
         pytree = {"testint": testint(), "testint64": testint64()}
-        out = self.do_roundtrip(pytree, exact_python_numeric_types=True, downcast_to_base_types=(testint, testint64))
+        out = self.do_roundtrip(pytree, exact_python_numeric_types=True,
+                                downcast_to_base_types=(testint, testint64))
         self.assertEqual(type(out["testint"]), int)
         self.assertEqual(type(out["testint64"]), np.int64)
 
@@ -190,8 +193,10 @@ class RoundtripTests(unittest.TestCase):
             pass
         class mytuple(tuple):
             pass
-        pytree = mydict({"mylist": mylist([12, 231, mylist(["ads"])]), "mytuple": mytuple((324, 234, "df"))})
-        out = self.do_roundtrip(pytree, exact_python_numeric_types=True, downcast_to_base_types=[mydict, mylist, mytuple])
+        pytree = mydict({"mylist": mylist([12, 231, mylist(["ads"])]),
+                         "mytuple": mytuple((324, 234, "df"))})
+        out = self.do_roundtrip(pytree, exact_python_numeric_types=True,
+                                downcast_to_base_types=[mydict, mylist, mytuple])
         self.assertEqual(type(out), dict)
         self.assertEqual(type(out["mylist"]), list)
         self.assertEqual(type(out["mytuple"]), tuple)
@@ -202,7 +207,8 @@ class RoundtripTests(unittest.TestCase):
         class testint64(np.int64):
             pass
         pytree = {"testint": testint(), "testint64": testint64()}
-        out = self.do_roundtrip(pytree, exact_python_numeric_types=False, downcast_to_base_types=(testint, testint64))
+        out = self.do_roundtrip(pytree, exact_python_numeric_types=False,
+                                downcast_to_base_types=(testint, testint64))
         self.assertEqual(type(out["testint"]), np.int64)
         self.assertEqual(type(out["testint64"]), np.int64)
 
@@ -211,7 +217,7 @@ class RoundtripTests(unittest.TestCase):
             "return_dict": CustomTypeReturnDict(3),
             "return_custom": CustomTypeReturnCustom(CustomTypeReturnDict(6)),
         }
-        out = self.do_roundtrip(pytree, exact_python_numeric_types=True)
+        pytree = self.do_roundtrip(pytree, exact_python_numeric_types=True)
         self.assertEqual(type(pytree["return_dict"]), CustomTypeReturnDict)
         self.assertEqual(pytree["return_dict"].a, 3)
         self.assertEqual(type(pytree["return_custom"]), CustomTypeReturnCustom)
