@@ -35,12 +35,11 @@ import dill
 
 # note that the following lists of types do not represent what is supported by jaxon
 # (refer to the README)
-JAXON_NP_NUMERIC_TYPES = (
-    np.int8, np.int16, np.int32, np.int64,
-    np.uint8, np.uint16, np.uint32, np.uint64,
-    np.float16, np.float32, np.float64, np.float128,
-    np.complex64, np.complex128,
-    np.bool)  # supported python dtypes
+JAXON_NP_NUMERIC_TYPE_NAMES = ("int8", "int16", "int32", "int64", "uint8", "uint16", "uint32",
+    "uint64", "float16", "float32", "float64", "float128", "complex64", "complex128",
+    "bool")  # supported python dtypes
+JAXON_NP_NUMERIC_TYPES = tuple(getattr(np, typename) for typename in JAXON_NP_NUMERIC_TYPE_NAMES
+                               if hasattr(np, typename))
 JAXON_PY_NUMERIC_TYPES = (int, float, bool, complex)  # supported python numeric types
 JAXON_CONTAINER_TYPES = (list, tuple, dict, set, frozenset)  # supported python container types
 
