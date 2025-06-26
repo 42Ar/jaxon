@@ -130,6 +130,7 @@ class RoundtripTests(unittest.TestCase):
         pytree = {
             "complex": 1j + 5,
             "bool": True,
+            "bool2": False,
             "None": None,
             "string": "string",
             "string_with_qoutation1": "'",

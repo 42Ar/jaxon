@@ -132,6 +132,14 @@ def _slice_from_repr(repr_content):
     return slice(*[(None if f == "None" else int(f)) for f in fields])
 
 
+def _bool_from_repr(repr_content):
+    if repr_content == "True":
+        return True
+    if repr_content == "False":
+        return False
+    assert False, f"unexpected boolean string representation: {repr_content!r}"
+
+
 def _base_type_name(obj, types, downcast_to_base_types):
     """Check if the type of `obj` is in `types` or if the user allowed downcasting to any
     of the types (if downcasting is possible)."""
@@ -360,7 +368,7 @@ def _simple_atom_from_data_str(typehint_or_data: str):
         assert len(typehint_or_data) >= 2 and typehint_or_data[-1] == "'", \
                "string parsing error: unexpected termination"
         return True, typehint_or_data[1:-1]
-    other_repr_types = [(int, None), (float, None), (bool, None), (complex, None),
+    other_repr_types = [(int, None), (float, None), (bool, _bool_from_repr), (complex, None),
                         (range, _range_from_repr), (slice, _slice_from_repr)]
     for primitive, parser in other_repr_types:
         # here, we parse primitives that were saved with exact_python_types=True
