@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 import h5py
+from numpy._core.multiarray import scalar
 from .test_util import tree_equal
 from jaxon import load, save, CircularPytreeException, JAXON_NP_NUMERIC_TYPES
 from jaxon import JaxonStorageHints, JAXON_ROOT_GROUP_KEY
@@ -136,13 +137,19 @@ class RoundtripTests(unittest.TestCase):
             self.run_roundtrip_test(pytree, exact_python_numeric_types)
 
     def test_ararys(self):
+        nprng = np.random.default_rng(42)
+        TEST_TYPES = (np.int8, np.uint8, np.int16, np.uint16, np.int32, np.uint32, np.int64, np.uint64, np.float16, np.float32, np.float64, np.bool)
+        TEST_TYPES_FOR_COMPELX = (np.float32, np.float64)
+        def random_complex(scalar_type):
+            return nprng.uniform(size=(4, 2, 3)).astype(scalar_type) +  1j*nprng.uniform(size=(4, 2, 3)).astype(scalar_type)
         pytree = {
-            "int32": np.arange(100, dtype=np.int32),
-            "int64": np.arange(100, dtype=np.int64),
-            "other": [np.zeros(100, dtype=scalar_type) for scalar_type in JAXON_NP_NUMERIC_TYPES],
-            "jax": jnp.zeros((23, 21)),
-            "jax2": jnp.array((23, 21))
-
+            "normal": nprng.uniform(size=(4, 2, 3)),
+            "int32": (nprng.uniform(size=(4, 2, 3))*10000).astype(np.int32),
+            "int64": (nprng.uniform(size=(4, 2, 3))*100).astype(np.int64),
+            "other": [(nprng.uniform(size=(4, 2, 3))*100).astype(scalar_type) for scalar_type in TEST_TYPES],
+            "jax":  [jnp.array((nprng.uniform(size=(4, 2, 3))*100).astype(scalar_type)) for scalar_type in TEST_TYPES],
+            "complex": [random_complex(scalar_type) for scalar_type in TEST_TYPES_FOR_COMPELX],
+            "complex_jax": [jnp.array(random_complex(scalar_type)) for scalar_type in TEST_TYPES_FOR_COMPELX]
         }
         for exact_python_numeric_types in (False, True):
             self.run_roundtrip_test(pytree, exact_python_numeric_types)
