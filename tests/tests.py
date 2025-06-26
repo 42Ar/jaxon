@@ -18,20 +18,28 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 import h5py
-from numpy._core.multiarray import scalar
-from .test_util import tree_equal
 from jaxon import load, save, CircularPytreeException, JAXON_NP_NUMERIC_TYPES
 from jaxon import JaxonStorageHints, JAXON_ROOT_GROUP_KEY
+from .test_util import tree_equal
+
+
+TEST_TYPES = (np.int8, np.uint8, np.int16, np.uint16, np.int32, np.uint32, np.int64,
+              np.uint64, np.float16, np.float32, np.float64, np.bool)
+TEST_TYPES_FOR_COMPELX = (np.float32, np.float64)
 
 
 class TestObjectForDill:
     a = 0.5
 
     def __eq__(self, other):
-        return self.a == other.a
+        tree_equal(self.a, other.a)
+        return True
+    
+    def __hash__(self) -> int:
+        return hash(self.a)
 
 
-class CustomTypeReturnDict:
+class TestCustomTypeReturnDict:
     def __init__(self, a):
         self.a = a
 
@@ -41,8 +49,12 @@ class CustomTypeReturnDict:
     def to_jaxon(self):
         return {"a": self.a}
 
+    def __eq__(self, other):
+        tree_equal(self.a, other.a)
+        return True
 
-class CustomTypeReturnCustom:
+
+class TestCustomTypeReturnField:
     def __init__(self, obj):
         self.obj = obj
 
@@ -53,19 +65,47 @@ class CustomTypeReturnCustom:
         return self.obj
 
     def __eq__(self, other):
-        return self.obj == other
+        tree_equal(self.obj, other.obj)  # raises error
+        return True
 
     def __hash__(self):
         return hash(self.obj)
 
 
 @dataclass
-class CustomDataclass:
+class TestCustomDataclass:
     mandatory: Any
     optional: Any = 345774
 
     def __hash__(self):
         return hash((self.mandatory, self.optional))
+
+    def __eq__(self, other) -> bool:
+        tree_equal(self.mandatory, other.mandatory)
+        tree_equal(self.optional, other.optional)
+        return True
+
+
+def build_fuzz_tree(cur_depth, max_depth, only_hashable=False):
+    if random.random() < 0.2:
+        subtree = build_fuzz_tree(cur_depth, max_depth, only_hashable=only_hashable)
+        return TestCustomDataclass(subtree)
+    if random.random() < 0.5 and cur_depth < max_depth:
+        if not only_hashable and random.random() < 0.1:
+            container = random.choice((list,))
+            return container([build_fuzz_tree(cur_depth + 1, max_depth, only_hashable=True)
+                             for _ in range(random.randint(0, 5))])
+        if not only_hashable and random.random() < 0.4:
+            return {build_fuzz_tree(cur_depth + 1, max_depth, only_hashable=True):
+                    build_fuzz_tree(cur_depth + 1, max_depth, only_hashable=False)
+                    for _ in range(random.randint(0, 5))}
+        return tuple(build_fuzz_tree(cur_depth + 1, max_depth, only_hashable)
+                     for _ in range(random.randint(0, 5)))
+    if random.random() < 0.5:
+        if only_hashable:
+            return 3984789438723
+        return np.arange(3)
+    return np.int16(2)
 
 
 class RoundtripTests(unittest.TestCase):
@@ -78,7 +118,8 @@ class RoundtripTests(unittest.TestCase):
 
     def run_roundtrip_test(self, pytree, exact_python_numeric_types, allow_dill=False):
         loaded = self.do_roundtrip(pytree, exact_python_numeric_types, allow_dill)
-        self.assertTrue(tree_equal(loaded, pytree, typematch=exact_python_numeric_types))
+        tree_equal(loaded, pytree, strict_leaf_type_check=exact_python_numeric_types)
+        return loaded
 
     def rand_string(self, seed, n):
         random.seed(seed)
@@ -138,10 +179,10 @@ class RoundtripTests(unittest.TestCase):
 
     def test_ararys(self):
         nprng = np.random.default_rng(42)
-        TEST_TYPES = (np.int8, np.uint8, np.int16, np.uint16, np.int32, np.uint32, np.int64, np.uint64, np.float16, np.float32, np.float64, np.bool)
-        TEST_TYPES_FOR_COMPELX = (np.float32, np.float64)
         def random_complex(scalar_type):
-            return nprng.uniform(size=(4, 2, 3)).astype(scalar_type) +  1j*nprng.uniform(size=(4, 2, 3)).astype(scalar_type)
+            real = nprng.uniform(size=(4, 2, 3)).astype(scalar_type)
+            imag = nprng.uniform(size=(4, 2, 3)).astype(scalar_type)
+            return real + 1j*imag
         pytree = {
             "normal": nprng.uniform(size=(4, 2, 3)),
             "int32": (nprng.uniform(size=(4, 2, 3))*10000).astype(np.int32),
@@ -163,11 +204,11 @@ class RoundtripTests(unittest.TestCase):
             self.run_roundtrip_test([], exact_python_numeric_types)
             self.run_roundtrip_test([3], exact_python_numeric_types)
             self.run_roundtrip_test(b"dfuikfhk\0\0ufs", exact_python_numeric_types)
+            self.run_roundtrip_test(np.arange(2), exact_python_numeric_types)
+            self.run_roundtrip_test(jnp.arange(2), exact_python_numeric_types)
 
     def test_dill_object_at_root(self):
-        r = self.do_roundtrip(TestObjectForDill(), False, allow_dill=True)
-        self.assertEqual(type(r), TestObjectForDill)
-        self.assertEqual(r.a, 0.5)
+        self.run_roundtrip_test(TestObjectForDill(), False, allow_dill=True)
 
     def test_dill_objects_in_container(self):
         pytree = [{"adssd": TestObjectForDill()}, TestObjectForDill()]
@@ -176,59 +217,55 @@ class RoundtripTests(unittest.TestCase):
 
     def test_numeric_type_conversion(self):
         pytree = {"int": 3, "float": 45.4, "complex": 4j + 4, "bool": True}
-        out = self.do_roundtrip(pytree, exact_python_numeric_types=False)
+        out = self.run_roundtrip_test(pytree, exact_python_numeric_types=False)
         self.assertEqual(type(out["int"]), np.int64)
         self.assertEqual(type(out["float"]), np.float64)
         self.assertEqual(type(out["complex"]), np.complex128)
         self.assertEqual(type(out["bool"]), np.bool)
 
     def test_type_downcast(self):
-        class testint(int):
+        class TestInt(int):
             pass
-        class testint64(np.int64):
+        class TestInt64(np.int64):
             pass
-        pytree = {"testint": testint(), "testint64": testint64()}
+        pytree = {"testint": TestInt(), "testint64": TestInt64()}
         out = self.do_roundtrip(pytree, exact_python_numeric_types=True,
-                                downcast_to_base_types=(testint, testint64))
+                                downcast_to_base_types=(TestInt, TestInt64))
         self.assertEqual(type(out["testint"]), int)
         self.assertEqual(type(out["testint64"]), np.int64)
 
     def test_container_type_downcast(self):
-        class mydict(dict):
+        class TestDict(dict):
             pass
-        class mylist(list):
+        class TestList(list):
             pass
-        class mytuple(tuple):
+        class TestTuple(tuple):
             pass
-        pytree = mydict({"mylist": mylist([12, 231, mylist(["ads"])]),
-                         "mytuple": mytuple((324, 234, "df"))})
+        pytree = TestDict({"mylist": TestList([12, 231, TestList(["ads"])]),
+                         "mytuple": TestTuple((324, 234, "df"))})
         out = self.do_roundtrip(pytree, exact_python_numeric_types=True,
-                                downcast_to_base_types=[mydict, mylist, mytuple])
+                                downcast_to_base_types=[TestDict, TestList, TestTuple])
         self.assertEqual(type(out), dict)
         self.assertEqual(type(out["mylist"]), list)
         self.assertEqual(type(out["mytuple"]), tuple)
 
     def test_numeric_and_type_downcast(self):
-        class testint(int):
+        class TestInt(int):
             pass
-        class testint64(np.int64):
+        class TestInt64(np.int64):
             pass
-        pytree = {"testint": testint(), "testint64": testint64()}
+        pytree = {"testint": TestInt(), "testint64": TestInt64()}
         out = self.do_roundtrip(pytree, exact_python_numeric_types=False,
-                                downcast_to_base_types=(testint, testint64))
+                                downcast_to_base_types=(TestInt, TestInt64))
         self.assertEqual(type(out["testint"]), np.int64)
         self.assertEqual(type(out["testint64"]), np.int64)
 
     def test_custom_types(self):
         pytree = {
-            "return_dict": CustomTypeReturnDict(3),
-            "return_custom": CustomTypeReturnCustom(CustomTypeReturnDict(6)),
+            "return_dict": TestCustomTypeReturnDict(3),
+            "return_custom": TestCustomTypeReturnField(TestCustomTypeReturnDict(6)),
         }
-        pytree = self.do_roundtrip(pytree, exact_python_numeric_types=True)
-        self.assertEqual(type(pytree["return_dict"]), CustomTypeReturnDict)
-        self.assertEqual(pytree["return_dict"].a, 3)
-        self.assertEqual(type(pytree["return_custom"]), CustomTypeReturnCustom)
-        self.assertEqual(type(pytree["return_custom"].obj), CustomTypeReturnDict)
+        self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
 
     def test_single_big_attr_value(self):
         pytree = self.rand_string(42, 1000000)
@@ -245,16 +282,24 @@ class RoundtripTests(unittest.TestCase):
             234: 5,
             (34, 234): 8,
             "sfddf": "dfs",
+            (23, 13): np.arange(34),
 
             # the reason why this works out of the box
             # is because the return value of jaxon type
             # can never be a simple atom (because it is a container)
             # and always must create a group
-            CustomTypeReturnCustom((324, 34)): 24,
-            CustomDataclass(234, "sdf"): "oasfd"
+            TestCustomTypeReturnField((324, 34)): 24,
+            TestCustomDataclass(234, "sdf"): "oasfd",
+            TestObjectForDill(): "nksdfnk"
         }
-        r = self.do_roundtrip(pytree, True)
-        self.assertEqual(pytree, r)
+        self.run_roundtrip_test(pytree, exact_python_numeric_types=True, allow_dill=True)
+
+    def test_nested_type_conversion(self):
+        pytree = {
+            TestCustomTypeReturnField(TestCustomTypeReturnField(TestCustomDataclass(234, "sdf"))):
+            TestCustomTypeReturnField(TestCustomTypeReturnField(TestCustomDataclass(34, "sdf43")))
+        }
+        self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
 
     def test_single_big_key_value(self):
         pytree = {self.rand_string(42, 1000000), "val"}
@@ -265,8 +310,13 @@ class RoundtripTests(unittest.TestCase):
         self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
 
     def test_custom_dataclass(self):
-        pytree = {CustomDataclass(213): CustomDataclass(CustomDataclass(21), "jkk")}
+        pytree = {TestCustomDataclass(213): TestCustomDataclass(TestCustomDataclass(21), "jkk")}
         self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
+
+    def test_by_fuzzing(self):
+        random.seed(42)
+        for _ in range(100):
+            self.run_roundtrip_test(build_fuzz_tree(0, 6), exact_python_numeric_types=True)
 
 
 class ErrorBranchTests(unittest.TestCase):
@@ -281,9 +331,9 @@ class ErrorBranchTests(unittest.TestCase):
 
     def trigger_unsupported_type_exception(self):
         with tempfile.TemporaryFile() as fp:
-            class custom:
+            class Custom:
                 pass
-            save(fp, custom())
+            save(fp, Custom())
 
     def test_unsupported_object(self):
         self.assertRaises(TypeError, self.trigger_unsupported_type_exception)

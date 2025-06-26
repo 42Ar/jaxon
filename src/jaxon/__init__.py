@@ -405,6 +405,11 @@ def _load_data(group, attr_value, group_key_with_th, has_key_th):
     return group[group_key_with_th][()]
 
 
+def _parse_key_or_val(group_key, prefix) -> int:
+    assert group_key[len(prefix)] == "(", f"malformed group key {group_key!s}"
+    return int(group_key[len(prefix) + 1:group_key.find(")")])
+
+
 def _load(group, group_key_and_th, allow_dill=False, dill_kwargs=None, debug_path=""):
     """Recursively load the pytree from the hd5f file. Here, `group` is an h5py group object,
     the `group_key_and_th` is the group key (including a possible type hint) which must be
@@ -461,22 +466,31 @@ def _load(group, group_key_and_th, allow_dill=False, dill_kwargs=None, debug_pat
     if types[0] == "dict":
         sub_group = group[group_key_and_th]
         pytree = {}
+        dict_key_index, dict_key = None, None
         for i, sub_group_key in enumerate(sub_group.attrs):
-            if sub_group_key.startswith("value"):
-                continue  # loaded later when if corresponding key is read
-            if sub_group_key.startswith("key"):
-                assert sub_group_key[len("key")] == "(" and sub_group_key[-1] == ")"
-                group_key_of_value = f"value({int(sub_group_key[len('key')+1:-1])})"
+            if sub_group_key.startswith(JAXON_DICT_KEY):
+                assert dict_key_index is None, f"expected {JAXON_DICT_KEY}({i}) to be " \
+                    f"followed immediately by {JAXON_DICT_VALUE}({i}) while parsing {debug_path!s}"
+                dict_key_index = _parse_key_or_val(sub_group_key, JAXON_DICT_KEY)
+                assert len(pytree) == dict_key_index, f"group key index error on {debug_path!s}"
                 dbgstr = f"{debug_path}.key({i})"
                 dict_key = _load(sub_group, sub_group_key, allow_dill, dill_kwargs, dbgstr)
+                continue
+            if sub_group_key.startswith(JAXON_DICT_VALUE):
+                index_in_value_key = _parse_key_or_val(sub_group_key, JAXON_DICT_VALUE)
+                assert dict_key_index is not None and index_in_value_key == dict_key_index, \
+                    f"expected {JAXON_DICT_VALUE}({i}) to be followed immediately by " \
+                    f"{JAXON_DICT_KEY}({i}) while parsing {debug_path!s}"
+                dict_key_index = None
             else:
                 # assume that the key is a simple atom (fully represented by sub_group_key)
+                assert dict_key_index is None, "did not expect presence of a " \
+                    f"{JAXON_DICT_KEY}({i}) while parsing {debug_path!s}"
                 sub_group_key_data, _ = _get_group_key_and_typehint(sub_group_key)
                 is_simple_atom, dict_key = _simple_atom_from_data_str(sub_group_key_data)
                 assert is_simple_atom, f"expected simple atom for sub group key {sub_group_key!r}"
-                group_key_of_value = sub_group_key
             dbgstr = f"{debug_path}.{_key_to_debugstring(dict_key, i)}"
-            pytree[dict_key] = _load(sub_group, group_key_of_value, allow_dill,
+            pytree[dict_key] = _load(sub_group, sub_group_key, allow_dill,
                                      dill_kwargs, dbgstr)
     elif types[0] in ("list", "tuple", "set", "frozenset"):
         sub_group = group[group_key_and_th]
