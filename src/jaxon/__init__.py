@@ -414,7 +414,7 @@ def _load_data(group, attr_value, group_key_with_th, has_key_th):
 
 
 def _parse_key_or_val(group_key, prefix) -> int:
-    assert group_key[len(prefix)] == "(", f"malformed group key {group_key!s}"
+    assert group_key[len(prefix)] == "(", f"malformed group key {group_key!r}"
     return int(group_key[len(prefix) + 1:group_key.find(")")])
 
 
@@ -478,9 +478,9 @@ def _load(group, group_key_and_th, allow_dill=False, dill_kwargs=None, debug_pat
         for i, sub_group_key in enumerate(sub_group.attrs):
             if sub_group_key.startswith(JAXON_DICT_KEY):
                 assert dict_key_index is None, f"expected {JAXON_DICT_KEY}({i}) to be " \
-                    f"followed immediately by {JAXON_DICT_VALUE}({i}) while parsing {debug_path!s}"
+                    f"followed immediately by {JAXON_DICT_VALUE}({i}) while parsing {debug_path!r}"
                 dict_key_index = _parse_key_or_val(sub_group_key, JAXON_DICT_KEY)
-                assert len(pytree) == dict_key_index, f"group key index error on {debug_path!s}"
+                assert len(pytree) == dict_key_index, f"group key index error on {debug_path!r}"
                 dbgstr = f"{debug_path}.key({i})"
                 dict_key = _load(sub_group, sub_group_key, allow_dill, dill_kwargs, dbgstr)
                 continue
@@ -488,12 +488,12 @@ def _load(group, group_key_and_th, allow_dill=False, dill_kwargs=None, debug_pat
                 index_in_value_key = _parse_key_or_val(sub_group_key, JAXON_DICT_VALUE)
                 assert dict_key_index is not None and index_in_value_key == dict_key_index, \
                     f"expected {JAXON_DICT_VALUE}({i}) to be followed immediately by " \
-                    f"{JAXON_DICT_KEY}({i}) while parsing {debug_path!s}"
+                    f"{JAXON_DICT_KEY}({i}) while parsing {debug_path!r}"
                 dict_key_index = None
             else:
                 # assume that the key is a simple atom (fully represented by sub_group_key)
                 assert dict_key_index is None, "did not expect presence of a " \
-                    f"{JAXON_DICT_KEY}({i}) while parsing {debug_path!s}"
+                    f"{JAXON_DICT_KEY}({i}) while parsing {debug_path!r}"
                 sub_group_key_data, _ = _get_group_key_and_typehint(sub_group_key)
                 is_simple_atom, dict_key = _simple_atom_from_data_str(sub_group_key_data)
                 assert is_simple_atom, f"expected simple atom for sub group key {sub_group_key!r}"
