@@ -522,7 +522,7 @@ def _load(group, group_key_and_th, allow_dill=False, dill_kwargs=None, debug_pat
     return pytree
 
 
-def save(path, pytree,
+def save(path_or_file, pytree,
          exact_python_numeric_types: bool = True,
          downcast_to_base_types: Iterable | None = None,
          py_to_np_types: Iterable | None = None,
@@ -531,12 +531,16 @@ def save(path, pytree,
          storage_hints: Iterable[tuple[Any, JaxonStorageHints]] | None = None):
     """
     Save a pytree in a human readable format in an hd5f file with the specified path.
-    If the file already exists, it's contents are overwritten.
+    If the file already exists (or a file object is provided),
+    it is truncated at the beginning.
 
     Parameters
     ----------
-    path :
-        The file path where the pytree will be saved.
+    path_or_file :
+        A path-like object indicating the file path or a file-like object with the methods
+        ``read()`` (or ``readinto()``), ``write()``, ``seek()``, ``tell()``, ``truncate()``
+        and ``flush()``. Providing a path-like object is the preferred option if possible
+        (see the h5py documentation).
     pytree :
         The pytree object to be saved. Can contain nested structures of arrays, lists,
         dicts, etc. (see README)
@@ -588,7 +592,13 @@ def save(path, pytree,
     else:
         storage_hints_converted = {id(obj): hint for obj, hint in storage_hints}
     root_atom = to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types, py_to_np_types)
-    with h5py.File(path, 'w', track_order=True) as file:
+    if hasattr(path_or_file, "seek") and hasattr(path_or_file, "truncate"):
+        # when a file like object is provided
+        # the file must be truncated like this because the "w"
+        # mode does not seem to do this (bug?)
+        path_or_file.seek(0)
+        path_or_file.truncate()
+    with h5py.File(path_or_file, 'w', track_order=True) as file:
         _store_atom(file, root_atom, JAXON_ROOT_GROUP_KEY, storage_hints_converted)
 
 

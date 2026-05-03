@@ -14,6 +14,7 @@ import tempfile
 import random
 import string
 import unittest
+from pathlib import Path
 from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
@@ -349,3 +350,18 @@ class IntrospectiveTests(unittest.TestCase):
                 self.assertIn("'dataset'", list(file[JAXON_ROOT_GROUP_KEY]))
                 self.assertEqual(1, len(list(file[JAXON_ROOT_GROUP_KEY])))
                 self.assertNotIn("'attribute'", list(file[JAXON_ROOT_GROUP_KEY]))
+
+
+class CheckFileTruncatedCorrectly(unittest.TestCase):
+    def do_test_truncate(self, path_or_fp):
+        save(path_or_fp, {"a": 3, "b": 2})
+        save(path_or_fp, {"a": 3})
+        self.assertEqual(load(path_or_fp), {"a": 3})
+
+    def test_truncate_fp(self):
+        with tempfile.TemporaryFile() as fp:
+            self.do_test_truncate(fp)
+
+    def test_truncate_real_file(self):
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            self.do_test_truncate(Path(tmpdirname) / "t.hdf5")
