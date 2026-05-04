@@ -20,7 +20,7 @@ import jax.numpy as jnp
 import numpy as np
 import h5py
 from jaxon import load, save, CircularPytreeException, JAXON_NP_NUMERIC_TYPES
-from jaxon import JaxonStorageHints, JAXON_ROOT_GROUP_KEY
+from jaxon import JaxonStorageHints, JAXON_ROOT_GROUP_KEY, PyTree
 from .test_util import tree_equal
 
 
@@ -365,3 +365,31 @@ class CheckFileTruncatedCorrectly(unittest.TestCase):
     def test_truncate_real_file(self):
         with tempfile.TemporaryDirectory() as tmpdirname:
             self.do_test_truncate(Path(tmpdirname) / "t.hdf5")
+
+
+class CheckRelaxedClassLoading(unittest.TestCase):
+    def test_allow_missing_fields(self):
+        with tempfile.TemporaryFile() as fp:
+            class MyCustomClass:
+                def __init__(self, a, b):
+                    self.a = a
+                    self.b = b
+                
+                def __eq__(self, other):
+                    return self.a == other.a and self.b == other.b
+
+            def my_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
+                if isinstance(pytree, MyCustomClass):
+                    return "mycustomtypeid", {"a": pytree.a, "b": pytree.b}
+                return None
+
+            pytree = {"g": MyCustomClass(MyCustomClass(None, 3), 0), "f": 123}
+            save(fp, pytree, custom_marshalers=(my_marshaler,))
+
+            def my_unmarshaler(qualname: str, pytree: PyTree) -> PyTree | None:
+                if qualname == "mycustomtypeid":
+                    return MyCustomClass(pytree["a"], pytree["b"])
+                return None
+
+            loaded_pytree = load(fp, custom_unmarshalers=(my_unmarshaler,))
+            tree_equal(loaded_pytree, pytree)

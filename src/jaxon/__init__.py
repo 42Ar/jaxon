@@ -23,7 +23,7 @@ Frank Hermann
 """
 
 
-from typing import Any, Iterable
+from typing import Any, Iterable, Callable
 from dataclasses import dataclass, field
 import dataclasses
 import importlib
@@ -58,6 +58,12 @@ JAXON_DICT_VALUE = "value" # used to indicate that this hd5f attribute stores
                            # a dict value (only used iff `JAXON_DICT_KEY` is used)
 JAXON_ROOT_GROUP_KEY = "JAXON_ROOT"  # hd5f root group name (might be followed by typehint of
                                      # the root object)
+
+
+PyTree = Any
+
+Marshaler = Callable[[PyTree], tuple[str, PyTree] | None]
+Unmarshaler = Callable[[str, PyTree], PyTree | None]
 
 
 class CircularPytreeException(Exception):
@@ -160,55 +166,73 @@ def _decode_string(buffer):
     return buffer.decode("utf-8")
 
 
-def _dataclass_to_container(instance):
+def _marshal_dataclass(instance):
     return {field.name: getattr(instance, field.name) for field in dataclasses.fields(instance)}
 
 
-def _custom_obj_to_container(pytree):
-    """This function is called to handle custom types. The first member in the returned
-    tuple indicates if conversion took place, the second gives the result of the conversion."""
+def _marshal_custom_obj(pytree: PyTree, custom_marshalers: tuple[Marshaler, ...]) \
+        -> tuple[str, PyTree] | None:
+    """Opposite of ``_unmarshal_custom_obj``. Returns ``None`` if marshaling of the custom object
+    is not supported, otherwise returns a tuple of the qualified name and the marshaled PyTree."""
+    for custom_marshaler in custom_marshalers:
+        result = custom_marshaler(pytree)
+        if result is not None:
+            return result
     if hasattr(pytree, "to_jaxon"):
-        return True, pytree.to_jaxon()
+        return _get_qualified_name(pytree), pytree.to_jaxon()
     if dataclasses.is_dataclass(pytree):
-        return True, _dataclass_to_container(pytree)
-    return False, None
+        return _get_qualified_name(pytree), _marshal_dataclass(pytree)
+    return None
 
 
-def _container_to_dataclass(container, instance):
+def _unmarshal_dataclass(container: PyTree, instance) -> PyTree:
     assert type(container) is dict, "expected dict container for dataclass"
     for field_name, field_value in container.items():
         object.__setattr__(instance, field_name, field_value)
 
 
-def _container_to_custom_obj(container, instance):
-    """Opposite of `_custom_obj_to_container`. Returns True if conversion took place."""
+def _unmarshal_custom_obj(qualified_name: str, container: PyTree,
+                          custom_unmarshalers: tuple[Unmarshaler, ...]) -> PyTree:
+    """Opposite of ``_marshal_custom_obj``. Returns the unmarshaled custom object
+    if successful or ``None`` otherwise."""
+    for custom_unmarshaler in custom_unmarshalers:
+        result = custom_unmarshaler(qualified_name, container)
+        if result is not None:
+            return result
+    try:
+        instance = _create_instance(qualified_name)
+    except ValueError as e:
+        raise ValueError(f"Failed to instantiate class {qualified_name!r}. This "
+                          "problem could be solved by providing a custom unmarshaler.") from e
     if hasattr(instance, "from_jaxon"):
         instance.from_jaxon(container)
     elif dataclasses.is_dataclass(instance):
-        _container_to_dataclass(container, instance)
+        _unmarshal_dataclass(container, instance)
     else:
-        return False
-    return True
+        return None
+    return instance
 
 
-def to_atom(pytree, allow_dill=False, dill_kwargs=None, downcast_to_base_types: tuple = tuple(),
-             py_to_np_types: tuple = tuple(), parent_objects=None, debug_path="") -> JaxonAtom:
+def to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_base_types: tuple,
+            py_to_np_types: tuple, custom_marshaler: tuple[Marshaler], parent_objects: list,
+            debug_path: str) -> JaxonAtom:
     """Recursively convert `pytree` to the internal representation. This is the entry point for
     `_to_atom` which does the actual work. Here, only the `id` of `pytree` is added to the
     returned `atom`."""
     atom = _to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types, py_to_np_types,
-                    parent_objects, debug_path)
+                    custom_marshaler, parent_objects, debug_path)
     return JaxonAtom(atom.data, atom.typehint, id(pytree))
 
 
-def _key_to_debugstring(dict_key, i):
+def _key_to_debugstring(dict_key, i) -> str:
     if isinstance(dict_key, (str, int, float, bool, complex)):
         return repr(dict_key)
     return f"{(i)}"
 
 
-def _to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types, py_to_np_types,
-             parent_objects, debug_path) -> JaxonAtom:
+def _to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_base_types: tuple,
+             py_to_np_types: tuple, custom_marshalers: tuple[Marshaler], parent_objects: list,
+             debug_path: str) -> JaxonAtom:
     """Recursively convert `pytree` to the internal representation."""
 
     # handle simple scalar(-like) types
@@ -251,25 +275,22 @@ def _to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types, py_to_np_t
                          byte_buffer_type)
 
     # handle container types first
-    if parent_objects is None:
-        parent_objects = [pytree]  # root node
-    elif any(pytree is p for p in parent_objects):
+    if any(pytree is p for p in parent_objects):
         raise CircularPytreeException(f"detected circular reference in pytree at {debug_path!r}")
-    else:
-        parent_objects = parent_objects + [pytree]  # Descend. Need new list of parents here.
-    is_custom_type = False
+    parent_objects = parent_objects + [pytree]  # Descend. Need new list of parents here.
+    has_done_conversion = False
     typehint = ""
     container_type = _base_type_name(pytree, JAXON_CONTAINER_TYPES, downcast_to_base_types)
-    while container_type is None:
-        # the '#' indicates that the class uses the to_jaxon/from_jaxon interface
-        # or another custom type conversion method
-        new_typehint = "#" + _get_qualified_name(pytree) + typehint
-        success, new_pytree = _custom_obj_to_container(pytree)
-        if not success:
+    while container_type is None:  # try to convert to container type
+        result = _marshal_custom_obj(pytree, custom_marshalers)
+        if result is None:
+            # conversion to container type failed
             break
-        typehint = new_typehint
-        pytree = new_pytree
-        is_custom_type = True
+        # the '#' indicates that the class uses the to_jaxon/from_jaxon
+        # interface or another custom type conversion method
+        typehint = "#" + result[0] + typehint
+        pytree = result[1]
+        has_done_conversion = True
         parent_objects += [pytree]
         container_type = _base_type_name(pytree, JAXON_CONTAINER_TYPES, downcast_to_base_types)
     if container_type is not None:
@@ -279,19 +300,21 @@ def _to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types, py_to_np_t
             data = JaxonDict()
             for i, (dict_key, dict_value) in enumerate(pytree.items()):
                 key_atom = to_atom(dict_key, allow_dill, dill_kwargs, downcast_to_base_types,
-                                   py_to_np_types, parent_objects, f"{debug_path}.key({i})")
+                                   py_to_np_types, custom_marshalers, parent_objects,
+                                   f"{debug_path}.key({i})")
                 dbgstr = f"{debug_path}.{_key_to_debugstring(dict_key, i)}"
                 value_atom = to_atom(dict_value, allow_dill, dill_kwargs, downcast_to_base_types,
-                                     py_to_np_types, parent_objects, dbgstr)
+                                     py_to_np_types, custom_marshalers, parent_objects, dbgstr)
                 data.data.append((key_atom, value_atom))
         else:
             data = JaxonList()
             for i, item in enumerate(pytree):
                 item_atom = to_atom(item, allow_dill, dill_kwargs, downcast_to_base_types,
-                                    py_to_np_types, parent_objects, f"{debug_path}({i})")
+                                    py_to_np_types, custom_marshalers, parent_objects,
+                                    f"{debug_path}({i})")
                 data.data.append(item_atom)
         return JaxonAtom(data, typehint)
-    if is_custom_type:
+    if has_done_conversion:
         raise TypeError(f"Object at {debug_path!r} is not a valid jaxon container type; it was "
                          "returned by a custom type conversion, but is not an instance of dict, "
                          "list, tuple, set or frozenset or another object that can be converted.")
@@ -301,8 +324,6 @@ def _to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types, py_to_np_t
     typehint = "!" + _get_qualified_name(pytree) + typehint
     debug_path += f"[{typehint}]"
     if allow_dill:
-        if dill_kwargs is None:
-            dill_kwargs = {}
         return JaxonAtom(memoryview(dill.dumps(pytree, **dill_kwargs)), typehint)
     raise TypeError(f"Object at {debug_path!r} is not a valid jaxon type, but it can be "
                      "serialized if allow_dill is set to True.")
@@ -413,12 +434,13 @@ def _load_data(group, attr_value, group_key_with_th, has_key_th):
     return group[group_key_with_th][()]
 
 
-def _parse_key_or_val(group_key, prefix) -> int:
+def _parse_key_or_val(group_key: str, prefix: str) -> int:
     assert group_key[len(prefix)] == "(", f"malformed group key {group_key!r}"
     return int(group_key[len(prefix) + 1:group_key.find(")")])
 
 
-def _load(group, group_key_and_th, allow_dill=False, dill_kwargs=None, debug_path=""):
+def _load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
+          debug_path: str, custom_unmarshalers: tuple[Unmarshaler, ...]) -> PyTree:
     """Recursively load the pytree from the hd5f file. Here, `group` is an h5py group object,
     the `group_key_and_th` is the group key (including a possible type hint) which must be
     a valid key in the group's attribute dict."""
@@ -463,8 +485,6 @@ def _load(group, group_key_and_th, allow_dill=False, dill_kwargs=None, debug_pat
         if not allow_dill:
             raise ValueError(f"cannot load serialized object at {debug_path!r}, "
                               "as allow_dill=False")
-        if dill_kwargs is None:
-            dill_kwargs = {}
         data = _load_data(group, attr_value, group_key_and_th, has_key_th)
         return dill.loads(data, **dill_kwargs)
 
@@ -482,7 +502,8 @@ def _load(group, group_key_and_th, allow_dill=False, dill_kwargs=None, debug_pat
                 dict_key_index = _parse_key_or_val(sub_group_key, JAXON_DICT_KEY)
                 assert len(pytree) == dict_key_index, f"group key index error on {debug_path!r}"
                 dbgstr = f"{debug_path}.key({i})"
-                dict_key = _load(sub_group, sub_group_key, allow_dill, dill_kwargs, dbgstr)
+                dict_key = _load(sub_group, sub_group_key, allow_dill, dill_kwargs,
+                                 dbgstr, custom_unmarshalers)
                 continue
             if sub_group_key.startswith(JAXON_DICT_VALUE):
                 index_in_value_key = _parse_key_or_val(sub_group_key, JAXON_DICT_VALUE)
@@ -499,10 +520,11 @@ def _load(group, group_key_and_th, allow_dill=False, dill_kwargs=None, debug_pat
                 assert is_simple_atom, f"expected simple atom for sub group key {sub_group_key!r}"
             dbgstr = f"{debug_path}.{_key_to_debugstring(dict_key, i)}"
             pytree[dict_key] = _load(sub_group, sub_group_key, allow_dill,
-                                     dill_kwargs, dbgstr)
+                                     dill_kwargs, dbgstr, custom_unmarshalers)
     elif types[0] in ("list", "tuple", "set", "frozenset"):
         sub_group = group[group_key_and_th]
-        pytree = [_load(sub_group, sub_group_key, allow_dill, dill_kwargs, f"{debug_path}({i})")
+        pytree = [_load(sub_group, sub_group_key, allow_dill, dill_kwargs,
+                        f"{debug_path}({i})", custom_unmarshalers)
                   for i, sub_group_key in enumerate(sub_group.attrs)]
         if types[0] == "tuple":
             pytree = tuple(pytree)
@@ -513,26 +535,27 @@ def _load(group, group_key_and_th, allow_dill=False, dill_kwargs=None, debug_pat
     else:
         raise ValueError(f"type of object at {debug_path!r} not understood")
     for qualified_name in types[1:]:
-        instance = _create_instance(qualified_name)
-        success = _container_to_custom_obj(pytree, instance)
-        pytree = instance
-        if not success:
-            raise ValueError(f"cannot load object at {debug_path!r}, as type "
-                             f"{_get_qualified_name!r} has not attribute from_jaxon")
+        new_pytree = _unmarshal_custom_obj(qualified_name, pytree, custom_unmarshalers)
+        if new_pytree is None:
+            raise ValueError(f"cannot load custom object at {debug_path!r}, as type identified by "
+                             f"{qualified_name!r} has no custom unmarshaler and its instance does "
+                             "not has the from_jaxon method and is not a dataclass")
+        pytree = new_pytree
     return pytree
 
 
-def save(path_or_file, pytree,
+def save(path_or_file, pytree: PyTree,
          exact_python_numeric_types: bool = True,
          downcast_to_base_types: Iterable | None = None,
          py_to_np_types: Iterable | None = None,
          allow_dill: bool = False,
          dill_kwargs: dict | None = None,
-         storage_hints: Iterable[tuple[Any, JaxonStorageHints]] | None = None):
+         storage_hints: Iterable[tuple[Any, JaxonStorageHints]] | None = None,
+         custom_marshalers: tuple[Marshaler] = tuple()) -> None:
     """
-    Save a pytree in a human readable format in an hd5f file with the specified path.
-    If the file already exists (or a file object is provided),
-    it is truncated at the beginning.
+    Save a pytree in a human readable format in an hd5f file with the specified path or
+    write it to the provided file object. If the file already exists (or a file object is
+    provided), it is truncated at the beginning.
 
     Parameters
     ----------
@@ -545,32 +568,35 @@ def save(path_or_file, pytree,
         The pytree object to be saved. Can contain nested structures of arrays, lists,
         dicts, etc. (see README)
     exact_python_numeric_types : bool, default=True
-        If False, the types int, float, bool and complex will be converted implicitly to
-        np.int64, np.float64, np.bool and np.complex128 respectively and stored as the
-        corresponding hd5f binary type. If the file is loaded, the types will be the numpy
-        (not python) types. If True, they are stored as strings and fully reconstructed
-        when loading.
+        If ``False``, the types ``int``, ``float``, ``bool`` and ``complex`` will be converted
+        implicitly to ``np.int64``, ``np.float64``, ``np.bool`` and ``np.complex128`` respectively
+        and stored as the corresponding hd5f binary type. If the file is loaded, the types will
+        be the numpy (not python) types.
     downcast_to_base_types : Iterable
         If a superclass of a supported base type is encountered in the pytree and is contained in
         this Iterable, it is converted to and stored as the supported base type. This means that
         it is also reconstructed as the supported base type when the file is loaded.
     py_to_np_types : Iterable
-        Apply the behavior of `exact_python_numeric_types` only to the python types in the given
-        Iterable. If not `None`, `exact_python_numeric_types` will be ignored.
+        Apply the behavior of ``exact_python_numeric_types`` only to the python types in the given
+        Iterable. If not ``None``, ``exact_python_numeric_types`` will be ignored.
     allow_dill : bool, default=False
-        Whether to allow `dill` for serializing unsupported objects.
+        Whether to allow ``dill`` for serializing unsupported objects.
     dill_kwargs : dict or None, optional
-        Extra keyword arguments passed to `dill.dumps` if `allow_dill` is True.
+        Extra keyword arguments passed to ``dill.dumps`` if ``allow_dill`` is True.
     storage_hints : Iterable of tuple[Any, JaxonStorageHints], optional
         A list of hints for how to store numpy/jax arrays, bytes, bytearray and memoryview
         objects. The first member must be a reference to an object in `pytree` and the second
-        specifies the corresponding `JaxonStorageHints`. If the object is not found in
+        specifies the corresponding ``JaxonStorageHints``. If the object is not found in
         the pytree, the hint is silently ignored.
-
-    Returns
-    -------
-    None
-        This function does not return anything. It writes data to the specified path.
+    custom_marshalers : Iterable[Marshaler]
+        If provided, each custom node in the pytree (that has not a builtin type) is passed to
+        the Callables in the order they are provided. Each Callable shall return either ``None``
+        indicating that the Callable cannot marshal the type or a ``tuple[str, PyTree]``
+        representing the qualified type name (that is used for unmarshaling) and the
+        corresponding marshaled object which must be another custom object or (typically) a
+        python standard container type. If all Callables return ``None`` the object is
+        marshaled using the ``to_jaxon`` interface (if available) or the default
+        implementation for dataclasses.
 
     Notes
     -----
@@ -591,7 +617,10 @@ def save(path_or_file, pytree,
         storage_hints_converted = {}
     else:
         storage_hints_converted = {id(obj): hint for obj, hint in storage_hints}
-    root_atom = to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types, py_to_np_types)
+    if dill_kwargs is None:
+        dill_kwargs = {}
+    root_atom = to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types,
+                        py_to_np_types, custom_marshalers, [], "")
     if hasattr(path_or_file, "seek") and hasattr(path_or_file, "truncate"):
         # when a file like object is provided
         # the file must be truncated like this because the "w"
@@ -602,27 +631,37 @@ def save(path_or_file, pytree,
         _store_atom(file, root_atom, JAXON_ROOT_GROUP_KEY, storage_hints_converted)
 
 
-def load(path, allow_dill: bool = False, dill_kwargs: dict | None = None):
+def load(path_or_file, allow_dill: bool = False, dill_kwargs: dict | None = None,
+         custom_unmarshalers: Iterable[Unmarshaler] = tuple()) -> PyTree:
     """
-    Load a pytree from an hd5f file.
+    Load a pytree from an hd5f file. It must be in the format produced by the ``save`` function.
 
     Parameters
     ----------
-    path : str or Path
-        The file path from which to load the pytree.
+    path_or_file :
+        A path-like object indicating the file path or a file-like object to read from.
+        Providing a path-like object is the preferred option if possible (see the h5py
+        documentation).
     allow_dill : bool, default=False
-        Whether to allow loading objects serialized with `dill`. If a serialized object is
-        encountered and this argument is `False`, an error is raised. 
+        Whether to allow loading objects serialized with ``dill``. If a serialized object is
+        encountered and this argument is ``False``, an error is raised. 
     dill_kwargs : dict or None, optional
-        Extra keyword arguments passed to `dill.loads` if `allow_dill` is True.
-
-    Notes
-    -----
-    - This function expects the file format produced by the `save` function.
+        Extra keyword arguments passed to ``dill.loads`` if ``allow_dill`` is True.
+    custom_unmarshalers : Iterable[Unmarshaler]
+        If provided, each custom type (identified by its qualified name) is passed
+        as the first argument and its marshalled data (in the form of a python standard
+        container or another custom object) as the second argument to the the Callables
+        in the order they are provided. The return type shall be either ``None`` indicating
+        that the Callable cannot unmarshal the type or a ``PyTree`` representing the
+        successfully unmarshaled object. The first result that is not ``None`` is used.
+        If all Callables return ``None``, the object is unmarshaled using the ``from_jaxon``
+        interface (if available) or the default implementation for dataclasses.
     """
-    with h5py.File(path, 'r') as file:
+    with h5py.File(path_or_file, 'r') as file:
         # a type hint might have been added to the JAXON_ROOT_GROUP_KEY
         group_key = next((group_key for group_key in file.attrs
                           if group_key.startswith(JAXON_ROOT_GROUP_KEY)), None)
         assert group_key is not None, "jaxon root group not found"
-        return _load(file, group_key, allow_dill=allow_dill, dill_kwargs=dill_kwargs)
+        if dill_kwargs is None:
+            dill_kwargs = {}
+        return _load(file, group_key, allow_dill, dill_kwargs, "", tuple(custom_unmarshalers))
