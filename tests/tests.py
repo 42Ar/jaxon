@@ -367,7 +367,7 @@ class CheckFileTruncatedCorrectly(unittest.TestCase):
             self.do_test_truncate(Path(tmpdirname) / "t.hdf5")
 
 
-class CheckRelaxedClassLoading(unittest.TestCase):
+class CustomMarshalerTests(unittest.TestCase):
     def test_allow_missing_fields(self):
         with tempfile.TemporaryFile() as fp:
             class MyCustomClass:
