@@ -44,6 +44,7 @@ JAXON_NP_NUMERIC_TYPES = tuple(getattr(np, typename) for typename in JAXON_NP_NU
 JAXON_PY_NUMERIC_TYPES = (int, float, bool, complex)  # supported python numeric types
 JAXON_CONTAINER_TYPES = (list, tuple, dict, set, frozenset)  # supported python container types
 
+
 # get the type of a jax array (in a version-independent way)
 # it is used to detect jax arrays
 JAXON_JAX_ARRAY_TYPE = type(jax.numpy.array([]))
@@ -60,11 +61,12 @@ JAXON_DICT_VALUE = "value" # used to indicate that this hd5f attribute stores
 JAXON_ROOT_GROUP_KEY = "JAXON_ROOT"  # hd5f root group name (might be followed by typehint of
                                      # the root object)
 
-
+# type definitions
 PyTree = Any
-
+PathElement = Any
 Marshaler = Callable[[PyTree], tuple[str, PyTree] | None]
 Unmarshaler = Callable[[str, PyTree], PyTree | None]
+LoadFilter = Callable[[list[PathElement]], bool]
 
 
 class JaxonFormatWarning(UserWarning):
@@ -82,13 +84,19 @@ class CircularPyTreeException(JaxonError):
 class JaxonNotLoaded:
     """Placeholder object used to indicate an object that has not been loaded, either
     on user request or because it is missing in the hdf5 file."""
-    __slots__ = ()
 
     def __repr__(self):
         return "JAXON_NOT_LOADED"
 
+class _DictKeyPathElement:
+    """Flag object path element to indicate that loader descended into a dict key."""
+
+    def __repr__(self):
+        return "_DICT_KEY_PATH_ELEMENT"
+
 
 JAXON_NOT_LOADED = JaxonNotLoaded()
+_DICT_KEY_PATH_ELEMENT = object()
 
 
 @dataclass
@@ -128,6 +136,12 @@ class JaxonStorageHints:
     """If the field `store_in_dataset` is `True` the associated data will be stored in an hd5f
     dataset. Otherwise, it will be stored in an hd5f attribute."""
     store_in_dataset: bool
+
+
+def has_common_prefix(path: Iterable, other_path: Iterable) -> bool:
+    """Checks if the two Iterables start with the same values. If one of the Iterables
+    is longer then the additional items are ignored."""
+    return all(map(lambda ab: ab[0] == ab[1], zip(path, other_path)))
 
 
 def _get_qualified_name(obj):
@@ -498,10 +512,13 @@ def _parse_key_or_val(group_key: str, prefix: str) -> int:
 
 def _load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
           debug_path: str, custom_unmarshalers: tuple[Unmarshaler, ...],
-          allow_missing_fields: bool, allow_unknown_fields: bool) -> PyTree:
+          allow_missing_fields: bool, allow_unknown_fields: bool,
+          load_filter: LoadFilter, parents: list[PathElement]) -> PyTree:
     """Recursively load the pytree from the hd5f file. Here, `group` is an h5py group object,
     the `group_key_and_th` is the group key (including a possible type hint) which must be
     a valid key in the group's attribute dict."""
+    if not any(p is _DICT_KEY_PATH_ELEMENT for p in parents) and not load_filter(parents):
+        return JAXON_NOT_LOADED
     _, th = _get_group_key_and_typehint(group_key_and_th)
     has_key_th = th is not None
     attr_value = None  # if None, it will be loaded later on demand (if necessary)
@@ -561,7 +578,8 @@ def _load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
                 assert len(pytree) == dict_key_index, f"group key index error on {debug_path!r}"
                 dbgstr = f"{debug_path}.key({i})"
                 dict_key = _load(sub_group, sub_group_key, allow_dill, dill_kwargs,
-                    dbgstr, custom_unmarshalers, allow_missing_fields, allow_unknown_fields)
+                    dbgstr, custom_unmarshalers, allow_missing_fields, allow_unknown_fields,
+                    load_filter, parents + [_DICT_KEY_PATH_ELEMENT])
                 continue
             if sub_group_key.startswith(JAXON_DICT_VALUE):
                 index_in_value_key = _parse_key_or_val(sub_group_key, JAXON_DICT_VALUE)
@@ -577,13 +595,14 @@ def _load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
                 is_simple_atom, dict_key = _simple_atom_from_data_str(sub_group_key_data)
                 assert is_simple_atom, f"expected simple atom for sub group key {sub_group_key!r}"
             dbgstr = f"{debug_path}.{_key_to_debugstring(dict_key, i)}"
-            pytree[dict_key] = _load(sub_group, sub_group_key, allow_dill, dill_kwargs, dbgstr,
-                custom_unmarshalers, allow_missing_fields, allow_unknown_fields)
+            pytree[dict_key] = _load(sub_group, sub_group_key, allow_dill, dill_kwargs,
+                dbgstr, custom_unmarshalers, allow_missing_fields, allow_unknown_fields,
+                load_filter, parents + [dict_key])
     elif types[0] in ("list", "tuple", "set", "frozenset"):
         sub_group = group[group_key_and_th]
-        pytree = [_load(sub_group, sub_group_key, allow_dill, dill_kwargs,
-                        f"{debug_path}({i})", custom_unmarshalers,
-                        allow_missing_fields, allow_unknown_fields)
+        pytree = [_load(sub_group, sub_group_key, allow_dill, dill_kwargs, f"{debug_path}({i})",
+                        custom_unmarshalers, allow_missing_fields, allow_unknown_fields,
+                        load_filter, parents + [i])
                   for i, sub_group_key in enumerate(sub_group.attrs)]
         if types[0] == "tuple":
             pytree = tuple(pytree)
@@ -693,7 +712,8 @@ def save(path_or_file, pytree: PyTree,
 
 def load(path_or_file, allow_dill: bool = False, dill_kwargs: dict | None = None,
          custom_unmarshalers: Iterable[Unmarshaler] = tuple(),
-         allow_missing_fields: bool = False, allow_unknown_fields: bool = False) -> PyTree:
+         allow_missing_fields: bool = False, allow_unknown_fields: bool = False,
+         load_filter: LoadFilter | None = None) -> PyTree:
     """
     Load a pytree from an hd5f file. It must be in the format produced by the ``save`` function.
 
@@ -723,8 +743,16 @@ def load(path_or_file, allow_dill: bool = False, dill_kwargs: dict | None = None
     allow_unknown_fields: bool, default=False
         Do not raise an error if fields are defined in a dataclass but are not found in
         the hdf5 file. The fields will be initialized using their default_factory or default
-        value if available. Otherwise, they will be initialized with singleton
-        JAXON_NOT_LOADED.
+        value if available. Otherwise, they will be initialized with the constant
+        ``JAXON_NOT_LOADED``.
+    load_filter: LoadFilter or None
+        If provided, the Callable controls what should be loaded. For each leaf or node in
+        the pytree, it is called with a list of items that represent the path in the pytree as
+        an argument and shall return ``True`` if the node or leaf shall be loaded and ``False``
+        otherwise. For dictionaries the path element is the loaded dict key object, for lists
+        and set like objects it is the index of the element (of type ``int``) and for
+        dataclasses it is the field name. If the pytree node or leaf is not loaded, it is
+        replaced with the constant ``JAXON_NOT_LOADED``.
     """
     with h5py.File(path_or_file, 'r') as file:
         # a type hint might have been added to the JAXON_ROOT_GROUP_KEY
@@ -733,5 +761,8 @@ def load(path_or_file, allow_dill: bool = False, dill_kwargs: dict | None = None
         assert group_key is not None, "jaxon root group not found"
         if dill_kwargs is None:
             dill_kwargs = {}
+        if load_filter is None:
+            load_filter = lambda path: True
         return _load(file, group_key, allow_dill, dill_kwargs, "",
-            tuple(custom_unmarshalers), allow_missing_fields, allow_unknown_fields)
+            tuple(custom_unmarshalers), allow_missing_fields, allow_unknown_fields,
+            load_filter, [])

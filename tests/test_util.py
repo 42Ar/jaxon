@@ -28,7 +28,12 @@ def leaves_equal(t1, t2, strict_leaf_type_check=False):
 
 
 def tree_equal(t1, t2, strict_leaf_type_check=False):
-    if isinstance(t1, dict):
+    if t1 is t2:
+        # under certain circumstances, the trees can share singleton
+        # constants (specifically JAXON_NOT_LOADED); in other cases this
+        # "is" check can shortcut checking (e.g. None is None, ...)
+        pass
+    elif isinstance(t1, dict):
         assert type(t1) is type(t2)
         assert len(t1) == len(t2)
         for (k1, v1), (k2, v2) in zip(t1.items(), t2.items()):

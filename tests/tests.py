@@ -19,8 +19,8 @@ from dataclasses import dataclass, make_dataclass, fields, field
 import jax.numpy as jnp
 import numpy as np
 import h5py
-from jaxon import load, save, CircularPyTreeException, JAXON_NP_NUMERIC_TYPES, JAXON_NOT_LOADED
-from jaxon import JaxonStorageHints, JAXON_ROOT_GROUP_KEY, PyTree, JaxonFormatWarning
+from jaxon import load, save, CircularPyTreeException, JAXON_NP_NUMERIC_TYPES, JAXON_NOT_LOADED, \
+    JaxonStorageHints, JAXON_ROOT_GROUP_KEY, PyTree, JaxonFormatWarning, has_common_prefix
 from .test_util import tree_equal
 
 
@@ -456,3 +456,25 @@ class RelaxedDataclassLoadingTests(unittest.TestCase):
     def test_allow_unknown_fields(self):
         with self.assertWarns(JaxonFormatWarning):
             self.run_test_allow_unknown_fields(allow_unknown_fields=True)
+
+
+@dataclass
+class LoadFilterTestsDataclass:
+    a: Any
+    b: Any
+
+
+class LoadFilterTests(unittest.TestCase):
+    def test_filtering(self):
+        with tempfile.TemporaryFile() as fp:
+            save(fp, {"a": {"a": 2}, "b": [LoadFilterTestsDataclass({"a": 5}, 3), "c"]})
+            loaded = load(fp, load_filter=lambda path: has_common_prefix(path, ("a",)))
+            tree_equal(loaded, {"a": {"a": 2}, "b": JAXON_NOT_LOADED})
+            loaded = load(fp, load_filter=lambda path: has_common_prefix(path, ("b", 1)))
+            tree_equal(loaded, {'a': JAXON_NOT_LOADED, 'b': [JAXON_NOT_LOADED, 'c']})
+            loaded = load(fp, load_filter=lambda path: has_common_prefix(path, ("b", 0, "b")))
+            tree_equal(loaded, {'a': JAXON_NOT_LOADED, 'b': [LoadFilterTestsDataclass(a=JAXON_NOT_LOADED, b=3), JAXON_NOT_LOADED]})
+            loaded = load(fp, load_filter=lambda path: False)
+            tree_equal(loaded, JAXON_NOT_LOADED)
+            loaded = load(fp, load_filter=lambda path: has_common_prefix(path, ("b", 0)))
+            tree_equal(loaded, {'a': JAXON_NOT_LOADED, 'b': [LoadFilterTestsDataclass(a={'a': 5}, b=3), JAXON_NOT_LOADED]})
