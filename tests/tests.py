@@ -8,19 +8,19 @@ Author
 Frank Hermann
 """
 
-
 from typing import Any
+import sys
 import tempfile
 import random
 import string
 import unittest
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, make_dataclass, fields, field
 import jax.numpy as jnp
 import numpy as np
 import h5py
-from jaxon import load, save, CircularPytreeException, JAXON_NP_NUMERIC_TYPES
-from jaxon import JaxonStorageHints, JAXON_ROOT_GROUP_KEY, PyTree
+from jaxon import load, save, CircularPyTreeException, JAXON_NP_NUMERIC_TYPES, JAXON_NOT_LOADED
+from jaxon import JaxonStorageHints, JAXON_ROOT_GROUP_KEY, PyTree, JaxonFormatWarning
 from .test_util import tree_equal
 
 
@@ -329,7 +329,7 @@ class ErrorBranchTests(unittest.TestCase):
             save(fp, pytree)
 
     def test_circular_reference_detection(self):
-        self.assertRaises(CircularPytreeException, self.trigger_circular_reference_exception)
+        self.assertRaises(CircularPyTreeException, self.trigger_circular_reference_exception)
 
     def trigger_unsupported_type_exception(self):
         with tempfile.TemporaryFile() as fp:
@@ -368,7 +368,7 @@ class CheckFileTruncatedCorrectly(unittest.TestCase):
 
 
 class CustomMarshalerTests(unittest.TestCase):
-    def test_allow_missing_fields(self):
+    def test_custom_marshaler(self):
         with tempfile.TemporaryFile() as fp:
             class MyCustomClass:
                 def __init__(self, a, b):
@@ -393,3 +393,66 @@ class CustomMarshalerTests(unittest.TestCase):
 
             loaded_pytree = load(fp, custom_unmarshalers=(my_unmarshaler,))
             tree_equal(loaded_pytree, pytree)
+
+
+class RelaxedDataclassLoadingTests(unittest.TestCase):
+    def run_test_allow_missing_fields(self, **kwargs):
+        with tempfile.TemporaryFile() as fp:
+            Dynamic = make_dataclass(
+                "Dynamic",
+                [("a", int), ("b", float)],
+            )
+            module = sys.modules[__name__]
+            setattr(module, "Dynamic", Dynamic)
+            pytree = Dynamic(a=123, b=2.0)
+            self.assertEqual(len(fields(pytree)), 2)
+            save(fp, pytree)
+            Dynamic = make_dataclass(
+                "Dynamic",
+                [("a", int)],
+            )
+            setattr(module, "Dynamic", Dynamic)
+            loaded_pytree = load(fp, **kwargs)
+            self.assertEqual(loaded_pytree.a, pytree.a)
+            self.assertEqual(len(fields(loaded_pytree)), 1)
+
+    def test_raise_if_missing_fields_are_not_allowed(self):
+        self.assertRaises(ValueError, self.run_test_allow_missing_fields, allow_missing_fields=False)
+
+    def test_allow_missing_fields(self):
+        with self.assertWarns(JaxonFormatWarning):
+            self.run_test_allow_missing_fields(allow_missing_fields=True)
+
+    def run_test_allow_unknown_fields(self, **kwargs):
+        with tempfile.TemporaryFile() as fp:
+            Dynamic = make_dataclass(
+                "Dynamic",
+                [("existing", int)],
+            )
+            module = sys.modules[__name__]
+            setattr(module, "Dynamic", Dynamic)
+            pytree = Dynamic(existing=123)
+            self.assertEqual(len(fields(pytree)), 1)
+            save(fp, pytree)
+            Dynamic = make_dataclass(
+                "Dynamic",
+                [("existing", int),
+                 ("missing_mandatory", float),
+                 ("missing_default", float, field(default=2)),
+                 ("missing_default_factory", float, field(default_factory=lambda: 3)),
+                 ("missing_default_factory_no_init", float, field(default_factory=lambda: 5, init=False))],
+            )
+            setattr(module, "Dynamic", Dynamic)
+            loaded_pytree = load(fp, **kwargs)
+            self.assertEqual(loaded_pytree.existing, 123)
+            self.assertIs(loaded_pytree.missing_mandatory, JAXON_NOT_LOADED)
+            self.assertEqual(loaded_pytree.missing_default, 2)
+            self.assertEqual(loaded_pytree.missing_default_factory, 3)
+            self.assertEqual(loaded_pytree.missing_default_factory_no_init, 5)
+
+    def test_raise_if_unknown_fields_are_not_allowed(self):
+        self.assertRaises(ValueError, self.run_test_allow_unknown_fields, allow_unknown_fields=False)
+
+    def test_allow_unknown_fields(self):
+        with self.assertWarns(JaxonFormatWarning):
+            self.run_test_allow_unknown_fields(allow_unknown_fields=True)

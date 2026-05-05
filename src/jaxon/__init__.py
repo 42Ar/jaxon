@@ -24,9 +24,10 @@ Frank Hermann
 
 
 from typing import Any, Iterable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import dataclasses
 import importlib
+import warnings
 import jax
 import numpy as np
 import h5py
@@ -66,20 +67,40 @@ Marshaler = Callable[[PyTree], tuple[str, PyTree] | None]
 Unmarshaler = Callable[[str, PyTree], PyTree | None]
 
 
-class CircularPytreeException(Exception):
+class JaxonFormatWarning(UserWarning):
+    """Warning that indicates an incompatible hdf5 file"""
+
+
+class JaxonError(RuntimeError):
+    """Base class for all errors raised by Jaxon"""
+
+
+class CircularPyTreeException(JaxonError):
     """Raised when a circular reference (reference to a parent object) was detected."""
+
+
+class JaxonNotLoaded:
+    """Placeholder object used to indicate an object that has not been loaded, either
+    on user request or because it is missing in the hdf5 file."""
+    __slots__ = ()
+
+    def __repr__(self):
+        return "JAXON_NOT_LOADED"
+
+
+JAXON_NOT_LOADED = JaxonNotLoaded()
 
 
 @dataclass
 class JaxonDict:
     """Internal representation of a dict."""
-    data: list[tuple['JaxonAtom', 'JaxonAtom']] = field(default_factory=list)
+    data: list[tuple['JaxonAtom', 'JaxonAtom']] = dataclasses.field(default_factory=list)
 
 
 @dataclass
 class JaxonList:
     """Internal representation of a list."""
-    data: list['JaxonAtom'] = field(default_factory=list)
+    data: list['JaxonAtom'] = dataclasses.field(default_factory=list)
 
 
 @dataclass
@@ -185,14 +206,50 @@ def _marshal_custom_obj(pytree: PyTree, custom_marshalers: tuple[Marshaler, ...]
     return None
 
 
-def _unmarshal_dataclass(container: PyTree, instance) -> PyTree:
+def _unmarshal_dataclass(container: PyTree, instance: PyTree, allow_missing_fields: bool,
+        allow_unknown_fields: bool) -> PyTree:
     assert type(container) is dict, "expected dict container for dataclass"
-    for field_name, field_value in container.items():
-        object.__setattr__(instance, field_name, field_value)
+    fields = dataclasses.fields(instance)
+    field_names = {f.name for f in fields}
+    available_field_names = container.keys()
+    missing_fields = available_field_names - field_names
+    if missing_fields:
+        message = f"The following fields in {_get_qualified_name(instance)!r} are present in " \
+                   "the hdf5 file but are missing in the class " \
+                  f"definition: {", ".join(missing_fields)}"
+        if allow_missing_fields:
+            warnings.warn(message, JaxonFormatWarning)
+        else:
+            raise ValueError(message + ". To omit this error run with allow_missing_fields=True.")
+    unknown_fields = field_names - available_field_names
+    if unknown_fields:
+        message = f"the following fields in {_get_qualified_name(instance)!r} are present in " \
+                   "the class definition but are missing in the hdf5 " \
+                  f"file: {", ".join(unknown_fields)}"
+        if allow_unknown_fields:
+            warnings.warn(message, JaxonFormatWarning)
+        else:
+            raise ValueError(message + "\n. To omit this error run with "
+                "allow_unknown_fields=True. Missing fields will be initialized using the "
+                "default_factory or default value. If both are missing JaxonNotLoaded will be "
+                "used as a placeholder. The __post_init__() logic is never triggered.")
+    for field in fields:
+        try:
+            val = container[field.name]
+        except KeyError:
+            if field.default_factory is not dataclasses.MISSING:
+                val = field.default_factory()
+            elif field.default is not dataclasses.MISSING:
+                val = field.default
+            else:
+                val = JAXON_NOT_LOADED
+        # use object.__setattr__ to make it work even if the dataclass is frozen
+        object.__setattr__(instance, field.name, val)
 
 
 def _unmarshal_custom_obj(qualified_name: str, container: PyTree,
-                          custom_unmarshalers: tuple[Unmarshaler, ...]) -> PyTree:
+        custom_unmarshalers: tuple[Unmarshaler, ...], allow_missing_fields: bool,
+        allow_unknown_fields: bool) -> PyTree:
     """Opposite of ``_marshal_custom_obj``. Returns the unmarshaled custom object
     if successful or ``None`` otherwise."""
     for custom_unmarshaler in custom_unmarshalers:
@@ -207,7 +264,7 @@ def _unmarshal_custom_obj(qualified_name: str, container: PyTree,
     if hasattr(instance, "from_jaxon"):
         instance.from_jaxon(container)
     elif dataclasses.is_dataclass(instance):
-        _unmarshal_dataclass(container, instance)
+        _unmarshal_dataclass(container, instance, allow_missing_fields, allow_unknown_fields)
     else:
         return None
     return instance
@@ -276,7 +333,7 @@ def _to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_ba
 
     # handle container types first
     if any(pytree is p for p in parent_objects):
-        raise CircularPytreeException(f"detected circular reference in pytree at {debug_path!r}")
+        raise CircularPyTreeException(f"detected circular reference in pytree at {debug_path!r}")
     parent_objects = parent_objects + [pytree]  # Descend. Need new list of parents here.
     has_done_conversion = False
     typehint = ""
@@ -440,7 +497,8 @@ def _parse_key_or_val(group_key: str, prefix: str) -> int:
 
 
 def _load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
-          debug_path: str, custom_unmarshalers: tuple[Unmarshaler, ...]) -> PyTree:
+          debug_path: str, custom_unmarshalers: tuple[Unmarshaler, ...],
+          allow_missing_fields: bool, allow_unknown_fields: bool) -> PyTree:
     """Recursively load the pytree from the hd5f file. Here, `group` is an h5py group object,
     the `group_key_and_th` is the group key (including a possible type hint) which must be
     a valid key in the group's attribute dict."""
@@ -503,7 +561,7 @@ def _load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
                 assert len(pytree) == dict_key_index, f"group key index error on {debug_path!r}"
                 dbgstr = f"{debug_path}.key({i})"
                 dict_key = _load(sub_group, sub_group_key, allow_dill, dill_kwargs,
-                                 dbgstr, custom_unmarshalers)
+                    dbgstr, custom_unmarshalers, allow_missing_fields, allow_unknown_fields)
                 continue
             if sub_group_key.startswith(JAXON_DICT_VALUE):
                 index_in_value_key = _parse_key_or_val(sub_group_key, JAXON_DICT_VALUE)
@@ -519,12 +577,13 @@ def _load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
                 is_simple_atom, dict_key = _simple_atom_from_data_str(sub_group_key_data)
                 assert is_simple_atom, f"expected simple atom for sub group key {sub_group_key!r}"
             dbgstr = f"{debug_path}.{_key_to_debugstring(dict_key, i)}"
-            pytree[dict_key] = _load(sub_group, sub_group_key, allow_dill,
-                                     dill_kwargs, dbgstr, custom_unmarshalers)
+            pytree[dict_key] = _load(sub_group, sub_group_key, allow_dill, dill_kwargs, dbgstr,
+                custom_unmarshalers, allow_missing_fields, allow_unknown_fields)
     elif types[0] in ("list", "tuple", "set", "frozenset"):
         sub_group = group[group_key_and_th]
         pytree = [_load(sub_group, sub_group_key, allow_dill, dill_kwargs,
-                        f"{debug_path}({i})", custom_unmarshalers)
+                        f"{debug_path}({i})", custom_unmarshalers,
+                        allow_missing_fields, allow_unknown_fields)
                   for i, sub_group_key in enumerate(sub_group.attrs)]
         if types[0] == "tuple":
             pytree = tuple(pytree)
@@ -535,7 +594,8 @@ def _load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
     else:
         raise ValueError(f"type of object at {debug_path!r} not understood")
     for qualified_name in types[1:]:
-        new_pytree = _unmarshal_custom_obj(qualified_name, pytree, custom_unmarshalers)
+        new_pytree = _unmarshal_custom_obj(qualified_name, pytree, custom_unmarshalers,
+            allow_missing_fields, allow_unknown_fields)
         if new_pytree is None:
             raise ValueError(f"cannot load custom object at {debug_path!r}, as type identified by "
                              f"{qualified_name!r} has no custom unmarshaler and its instance does "
@@ -632,7 +692,8 @@ def save(path_or_file, pytree: PyTree,
 
 
 def load(path_or_file, allow_dill: bool = False, dill_kwargs: dict | None = None,
-         custom_unmarshalers: Iterable[Unmarshaler] = tuple()) -> PyTree:
+         custom_unmarshalers: Iterable[Unmarshaler] = tuple(),
+         allow_missing_fields: bool = False, allow_unknown_fields: bool = False) -> PyTree:
     """
     Load a pytree from an hd5f file. It must be in the format produced by the ``save`` function.
 
@@ -656,6 +717,14 @@ def load(path_or_file, allow_dill: bool = False, dill_kwargs: dict | None = None
         successfully unmarshaled object. The first result that is not ``None`` is used.
         If all Callables return ``None``, the object is unmarshaled using the ``from_jaxon``
         interface (if available) or the default implementation for dataclasses.
+    allow_missing_fields: bool, default=False
+        Do not raise an error if fields are present in the hdf5 file which do not have a
+        corresponding definition in the instanciated dataclass.
+    allow_unknown_fields: bool, default=False
+        Do not raise an error if fields are defined in a dataclass but are not found in
+        the hdf5 file. The fields will be initialized using their default_factory or default
+        value if available. Otherwise, they will be initialized with singleton
+        JAXON_NOT_LOADED.
     """
     with h5py.File(path_or_file, 'r') as file:
         # a type hint might have been added to the JAXON_ROOT_GROUP_KEY
@@ -664,4 +733,5 @@ def load(path_or_file, allow_dill: bool = False, dill_kwargs: dict | None = None
         assert group_key is not None, "jaxon root group not found"
         if dill_kwargs is None:
             dill_kwargs = {}
-        return _load(file, group_key, allow_dill, dill_kwargs, "", tuple(custom_unmarshalers))
+        return _load(file, group_key, allow_dill, dill_kwargs, "",
+            tuple(custom_unmarshalers), allow_missing_fields, allow_unknown_fields)
