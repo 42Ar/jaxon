@@ -8,7 +8,7 @@ Author
 Frank Hermann
 """
 
-from typing import Any
+from typing import Any, override
 import sys
 import tempfile
 import random
@@ -20,8 +20,9 @@ import jax.numpy as jnp
 import numpy as np
 import h5py
 from jaxon import load, save, CircularPyTreeException, JAXON_NP_NUMERIC_TYPES, JAXON_NOT_LOADED, \
-    JaxonStorageHints, JAXON_ROOT_GROUP_KEY, PyTree, JaxonFormatWarning, has_common_prefix
-from .test_util import tree_equal
+    JaxonStorageHints, JAXON_ROOT_GROUP_KEY, PyTree, JaxonFormatWarning, has_common_prefix, \
+    JAXON_PY_NUMERIC_TYPES
+from .test_util import tree_equal, JaxonPyTreeTestNode
 
 
 TEST_TYPES = (np.int8, np.uint8, np.int16, np.uint16, np.int32, np.uint32, np.int64,
@@ -29,18 +30,18 @@ TEST_TYPES = (np.int8, np.uint8, np.int16, np.uint16, np.int32, np.uint32, np.in
 TEST_TYPES_FOR_COMPELX = (np.float32, np.float64)
 
 
-class TestObjectForDill:
+class TestObjectForDill(JaxonPyTreeTestNode):
     a = 0.5
-
-    def __eq__(self, other):
-        tree_equal(self.a, other.a)
-        return True
     
     def __hash__(self) -> int:
         return hash(self.a)
 
+    @override
+    def children(self) -> tuple:
+        return (self.a,)
 
-class TestCustomTypeReturnDict:
+
+class TestCustomTypeReturnDict(JaxonPyTreeTestNode):
     def __init__(self, a):
         self.a = a
 
@@ -50,12 +51,12 @@ class TestCustomTypeReturnDict:
     def to_jaxon(self):
         return {"a": self.a}
 
-    def __eq__(self, other):
-        tree_equal(self.a, other.a)
-        return True
+    @override
+    def children(self) -> tuple:
+        return (self.a,)
 
 
-class TestCustomTypeReturnField:
+class TestCustomTypeReturnField(JaxonPyTreeTestNode):
     def __init__(self, obj):
         self.obj = obj
 
@@ -65,48 +66,77 @@ class TestCustomTypeReturnField:
     def to_jaxon(self):
         return self.obj
 
-    def __eq__(self, other):
-        tree_equal(self.obj, other.obj)  # raises error
-        return True
+    @override
+    def children(self) -> tuple:
+        return (self.obj,)
 
     def __hash__(self):
         return hash(self.obj)
 
 
 @dataclass
-class TestCustomDataclass:
-    mandatory: Any
-    optional: Any = 345774
+class TestCustomDataclass(JaxonPyTreeTestNode):
+    a: Any
+    b: Any = 345774
 
     def __hash__(self):
-        return hash((self.mandatory, self.optional))
+        return hash((self.a, self.b))
 
-    def __eq__(self, other) -> bool:
-        tree_equal(self.mandatory, other.mandatory)
-        tree_equal(self.optional, other.optional)
-        return True
+    @override
+    def children(self) -> tuple:
+        return (self.a, self.b)
 
 
-def build_fuzz_tree(cur_depth, max_depth, only_hashable=False):
+def build_fuzz_tree(cur_depth: int, max_depth: int, all_objects: list[PyTree],
+        only_hashable_objects: list[PyTree], only_hashable: bool = False) -> PyTree:
     if random.random() < 0.2:
-        subtree = build_fuzz_tree(cur_depth, max_depth, only_hashable=only_hashable)
-        return TestCustomDataclass(subtree)
-    if random.random() < 0.5 and cur_depth < max_depth:
+        # try to put reference if objects are available
+        if only_hashable:
+            if only_hashable_objects:
+                return random.choice(only_hashable_objects)
+        else:
+            if all_objects:
+                return random.choice(all_objects)
+    if random.random() < 0.2:
+        # put dataclass
+        subtree = build_fuzz_tree(cur_depth, max_depth, all_objects, only_hashable_objects,
+            only_hashable=only_hashable)
+        if random.random() < 0.8:
+            pytree = TestCustomDataclass(subtree)
+        else:
+            subtree2 = build_fuzz_tree(cur_depth, max_depth, all_objects, only_hashable_objects,
+                only_hashable=only_hashable)
+            pytree = TestCustomDataclass(subtree, subtree2)
+    elif random.random() < 0.5 and cur_depth < max_depth:
+        # put python container
         if not only_hashable and random.random() < 0.1:
             container = random.choice((list,))
-            return container([build_fuzz_tree(cur_depth + 1, max_depth, only_hashable=True)
-                             for _ in range(random.randint(0, 5))])
-        if not only_hashable and random.random() < 0.4:
-            return {build_fuzz_tree(cur_depth + 1, max_depth, only_hashable=True):
-                    build_fuzz_tree(cur_depth + 1, max_depth, only_hashable=False)
-                    for _ in range(random.randint(0, 5))}
-        return tuple(build_fuzz_tree(cur_depth + 1, max_depth, only_hashable)
-                     for _ in range(random.randint(0, 5)))
-    if random.random() < 0.5:
-        if only_hashable:
-            return 3984789438723
-        return np.arange(3)
-    return np.int16(2)
+            pytree = container([build_fuzz_tree(cur_depth + 1, max_depth, all_objects,
+                                only_hashable_objects, only_hashable=True)
+                               for _ in range(random.randint(0, 5))])
+        elif not only_hashable and random.random() < 0.4:
+            pytree =  {build_fuzz_tree(cur_depth + 1, max_depth, all_objects,
+                                       only_hashable_objects, only_hashable=True):
+                       build_fuzz_tree(cur_depth + 1, max_depth, all_objects,
+                                       only_hashable_objects, only_hashable=False)
+                       for _ in range(random.randint(0, 5))}
+        else:
+            pytree = tuple(build_fuzz_tree(cur_depth + 1, max_depth, all_objects,
+                                           only_hashable_objects, only_hashable)
+                           for _ in range(random.randint(0, 5)))
+    else:
+        # put leaf
+        if random.random() < 0.3:
+            if only_hashable:
+                pytree = 3984789438723
+            else:
+                pytree =  np.arange(3)
+        else:
+            pytree = "".join(random.choice("\\/'\0ä") for _ in range(random.randint(0, 30)))
+    all_objects.append(pytree)
+    if only_hashable:
+        only_hashable_objects.append(pytree)
+    return pytree
 
 
 class RoundtripTests(unittest.TestCase):
@@ -119,7 +149,10 @@ class RoundtripTests(unittest.TestCase):
 
     def run_roundtrip_test(self, pytree, exact_python_numeric_types, allow_dill=False):
         loaded = self.do_roundtrip(pytree, exact_python_numeric_types, allow_dill)
-        tree_equal(loaded, pytree, strict_leaf_type_check=exact_python_numeric_types)
+        py_to_np_types = tuple()
+        if not exact_python_numeric_types:
+            py_to_np_types = JAXON_PY_NUMERIC_TYPES
+        tree_equal(loaded, pytree, tuple(), py_to_np_types)
         return loaded
 
     def rand_string(self, seed, n):
@@ -134,9 +167,11 @@ class RoundtripTests(unittest.TestCase):
             "bool2": False,
             "None": None,
             "string": "string",
-            "string_with_qoutation1": "'",
-            "string_with_qoutation2": '"',
-            "string_with_qoutation3": '"\'',
+            "string_with_quotes1": "'",
+            "string_with_quotes2": '"',
+            "string_with_quotes3": '"\'',
+            "string_with_quotes_and_slashes": '/',
+            "string_with_quotes_and_backslashes": '/bk/asd\\/sd\\\\//\\/',
             "string_with_zeros": '\0sfddf\0asdf',
             "string_with_trailing_zeros": '\0sfddf\0asdf\0\0',
             "string_with_trailing_zeros_and_non_ascii": '\0sfddf\0asdöüüäöüöäöüöüf\0\0'*5,
@@ -317,8 +352,9 @@ class RoundtripTests(unittest.TestCase):
 
     def test_by_fuzzing(self):
         random.seed(42)
-        for _ in range(100):
-            self.run_roundtrip_test(build_fuzz_tree(0, 6), exact_python_numeric_types=True)
+        for _ in range(200):
+            pytree = build_fuzz_tree(0, 20, [], [])
+            self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
 
 
 class ErrorBranchTests(unittest.TestCase):
@@ -458,23 +494,44 @@ class RelaxedDataclassLoadingTests(unittest.TestCase):
             self.run_test_allow_unknown_fields(allow_unknown_fields=True)
 
 
-@dataclass
-class LoadFilterTestsDataclass:
-    a: Any
-    b: Any
-
-
 class LoadFilterTests(unittest.TestCase):
     def test_filtering(self):
         with tempfile.TemporaryFile() as fp:
-            save(fp, {"a": {"a": 2}, "b": [LoadFilterTestsDataclass({"a": 5}, 3), "c"]})
+            save(fp, {"a": {"a": 2}, "b": [TestCustomDataclass({"a": 5}, 3), "c"]})
             loaded = load(fp, load_filter=lambda path: has_common_prefix(path, ("a",)))
             tree_equal(loaded, {"a": {"a": 2}, "b": JAXON_NOT_LOADED})
             loaded = load(fp, load_filter=lambda path: has_common_prefix(path, ("b", 1)))
             tree_equal(loaded, {'a': JAXON_NOT_LOADED, 'b': [JAXON_NOT_LOADED, 'c']})
             loaded = load(fp, load_filter=lambda path: has_common_prefix(path, ("b", 0, "b")))
-            tree_equal(loaded, {'a': JAXON_NOT_LOADED, 'b': [LoadFilterTestsDataclass(a=JAXON_NOT_LOADED, b=3), JAXON_NOT_LOADED]})
+            tree_equal(loaded, {'a': JAXON_NOT_LOADED, 'b': [TestCustomDataclass(a=JAXON_NOT_LOADED, b=3), JAXON_NOT_LOADED]})
             loaded = load(fp, load_filter=lambda path: False)
             tree_equal(loaded, JAXON_NOT_LOADED)
             loaded = load(fp, load_filter=lambda path: has_common_prefix(path, ("b", 0)))
-            tree_equal(loaded, {'a': JAXON_NOT_LOADED, 'b': [LoadFilterTestsDataclass(a={'a': 5}, b=3), JAXON_NOT_LOADED]})
+            tree_equal(loaded, {'a': JAXON_NOT_LOADED, 'b': [TestCustomDataclass(a={'a': 5}, b=3), JAXON_NOT_LOADED]})
+
+
+class ReferenceRecoveryTests(unittest.TestCase):
+    def test_correct_ref_recovery(self):
+        a = np.array([3, 4])
+        b = np.array([8, 4])
+        g = (a, a, b)
+        pytree = {"a": a, "b": g, "c": b, "d": (g,)}
+        with tempfile.TemporaryFile() as fp:
+            save(fp, pytree)
+            loaded = load(fp)
+            tree_equal(pytree, loaded)
+            self.assertIs(loaded["a"], loaded["b"][0])
+            self.assertIs(loaded["a"], loaded["b"][1])
+            self.assertIs(loaded["c"], loaded["b"][2])
+            self.assertIs(loaded["b"], loaded["d"][0])
+
+
+    def test_correct_ref_recovery_partially_loaded(self):
+        a = np.array([3, 4])
+        b = np.array([8, 4])
+        g = (a, a, b)
+        pytree = {"a": a, "b": g, "c": b, "d": (g,)}
+        with tempfile.TemporaryFile() as fp:
+            save(fp, pytree)
+            loaded = load(fp, load_filter=lambda path: has_common_prefix(path, ("a",)) or has_common_prefix(path, ("b", 0)))
+            tree_equal(loaded, {'a': a, 'b': (a, JAXON_NOT_LOADED, JAXON_NOT_LOADED), 'c': JAXON_NOT_LOADED, 'd': JAXON_NOT_LOADED})

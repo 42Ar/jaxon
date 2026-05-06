@@ -1,4 +1,4 @@
-# Copyright (C) 2025  Frank Hermann
+# Copyright (C) 2026  Frank Hermann
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -60,13 +60,17 @@ JAXON_DICT_VALUE = "value" # used to indicate that this hd5f attribute stores
                            # a dict value (only used iff `JAXON_DICT_KEY` is used)
 JAXON_ROOT_GROUP_KEY = "JAXON_ROOT"  # hd5f root group name (might be followed by typehint of
                                      # the root object)
+JAXON_REF = "ref"  # typehint that indicates a path to another object in the
+                   # hdf5 file which maps to a python reference
+
 
 # type definitions
 PyTree = Any
-PathElement = Any
+_PathElement = Any
 Marshaler = Callable[[PyTree], tuple[str, PyTree] | None]
 Unmarshaler = Callable[[str, PyTree], PyTree | None]
-LoadFilter = Callable[[list[PathElement]], bool]
+LoadFilter = Callable[[list[_PathElement]], bool]
+_JaxonMissing = object
 
 
 class JaxonFormatWarning(UserWarning):
@@ -81,12 +85,19 @@ class CircularPyTreeException(JaxonError):
     """Raised when a circular reference (reference to a parent object) was detected."""
 
 
+@dataclass(frozen=True)
+class _JaxonLoadedFromReferenceWrapper:
+    """Indicates that the wrapped object has been loaded from a reference."""
+    pytree: PyTree
+
+
 class JaxonNotLoaded:
     """Placeholder object used to indicate an object that has not been loaded, either
     on user request or because it is missing in the hdf5 file."""
 
     def __repr__(self):
         return "JAXON_NOT_LOADED"
+
 
 class _DictKeyPathElement:
     """Flag object path element to indicate that loader descended into a dict key."""
@@ -96,7 +107,8 @@ class _DictKeyPathElement:
 
 
 JAXON_NOT_LOADED = JaxonNotLoaded()
-_DICT_KEY_PATH_ELEMENT = object()
+_DICT_KEY_PATH_ELEMENT = _DictKeyPathElement()
+_JAXON_MISSING = _JaxonMissing()
 
 
 @dataclass
@@ -284,15 +296,30 @@ def _unmarshal_custom_obj(qualified_name: str, container: PyTree,
     return instance
 
 
-def to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_base_types: tuple,
-            py_to_np_types: tuple, custom_marshaler: tuple[Marshaler], parent_objects: list,
-            debug_path: str) -> JaxonAtom:
-    """Recursively convert `pytree` to the internal representation. This is the entry point for
-    `_to_atom` which does the actual work. Here, only the `id` of `pytree` is added to the
-    returned `atom`."""
-    atom = _to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types, py_to_np_types,
-                    custom_marshaler, parent_objects, debug_path)
-    return JaxonAtom(atom.data, atom.typehint, id(pytree))
+def _to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_base_types: tuple,
+             py_to_np_types: tuple, custom_marshalers: tuple[Marshaler],
+             parent_objects: tuple[PyTree, ...], debug_path: str,
+             cached_atoms: dict[int, JaxonAtom]) -> JaxonAtom:
+    """Recursively convert ``pytree`` to the internal representation. This function handles caching,
+    which also enables correct reconstruction of references during loading. Also, this function
+    prevents infinite recursion (by detecting circular references) and adds the original object
+    id to the atom."""
+    atom = _to_atom_non_reference_type(pytree, downcast_to_base_types, py_to_np_types)
+    if atom is not _JAXON_MISSING:
+        return JaxonAtom(atom.data, atom.typehint, id(pytree))  # type: ignore (cannot be of
+                                                                # type JaxonMissing)
+    # from here, the data items can be bigger and it is worthwhile to cache them
+    result = cached_atoms.get(id(pytree), _JAXON_MISSING)
+    if result is not _JAXON_MISSING:
+        return result  # type: ignore (cannot be of type JaxonMissing)
+    if any(pytree is p for p in parent_objects):
+        raise CircularPyTreeException(f"detected circular reference in pytree at {debug_path!r}")
+    parent_objects = (*parent_objects, pytree)
+    atom = _to_atom_reference_type(pytree, allow_dill, dill_kwargs, downcast_to_base_types,
+        py_to_np_types, custom_marshalers, parent_objects, debug_path, cached_atoms)
+    atom = JaxonAtom(atom.data, atom.typehint, id(pytree))
+    cached_atoms[id(pytree)] = atom
+    return atom
 
 
 def _key_to_debugstring(dict_key, i) -> str:
@@ -301,10 +328,15 @@ def _key_to_debugstring(dict_key, i) -> str:
     return f"{(i)}"
 
 
-def _to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_base_types: tuple,
-             py_to_np_types: tuple, custom_marshalers: tuple[Marshaler], parent_objects: list,
-             debug_path: str) -> JaxonAtom:
-    """Recursively convert `pytree` to the internal representation."""
+def _to_atom_non_reference_type(pytree: PyTree, downcast_to_base_types: tuple,
+        py_to_np_types: tuple) -> JaxonAtom | _JaxonMissing:
+    """Try to convert ``pytree`` to the internal representation if it is an object of a type
+    that does not require references to be preserved. For example, python guarantees identity
+    for all ``None`` objects; for other objects such as ``int`` or ``np.int`` references are
+    not preserved by jaxon, as they cannot be relied upon anyway in python. Return
+    ``JAXON_MISSING`` if ``pytree`` does not qualify as a non reference object. Note that
+    for ``str`` this function returns ``JAXON_MISSING`` as it might be possible to save memory
+    if jaxon attempts to preserve references to string objects."""
 
     # handle simple scalar(-like) types
     if pytree is None:
@@ -322,13 +354,25 @@ def _to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_ba
         if isinstance(pytree, complex):
             rep = rep[1:-1]  # remove unnecessary brackets
         return JaxonAtom(f"{py_numeric_type}({rep})")
-    other_repr_type = _base_type_name(pytree, (range, slice), downcast_to_base_types)
-    if other_repr_type is not None:
+    if isinstance(pytree, (range, slice)):  # range, slice cannot be subclassed;
+                                            # so downcast_to_base_types is irrelevant
         typehint = repr(pytree)
         if isinstance(pytree, (range, slice)):
             # remove unnecessary spaces which would cause parsing to fail
             typehint = typehint.replace(" ", "")
         return JaxonAtom(typehint)
+
+    # can not be a small object
+    return _JAXON_MISSING
+
+
+def _to_atom_reference_type(pytree: PyTree, allow_dill: bool, dill_kwargs: dict,
+        downcast_to_base_types: tuple, py_to_np_types: tuple, custom_marshalers: tuple[Marshaler],
+        parent_objects: tuple[PyTree, ...], debug_path: str,
+        cached_atoms: dict[int, JaxonAtom]) -> JaxonAtom:
+    """Convert ``pytree`` recursively to the internal representation. Should only be called if
+    ``_to_atom_non_reference_type`` returned ``JAXON_MISSING``."""
+    # handle strings
     str_type = _base_type_name(pytree, (str,), downcast_to_base_types)
     if str_type is not None:
         # add quotation marks to avoid possible naming collision with type hint
@@ -345,10 +389,7 @@ def _to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_ba
         return JaxonAtom(pytree if isinstance(pytree, memoryview) else memoryview(pytree),
                          byte_buffer_type)
 
-    # handle container types first
-    if any(pytree is p for p in parent_objects):
-        raise CircularPyTreeException(f"detected circular reference in pytree at {debug_path!r}")
-    parent_objects = parent_objects + [pytree]  # Descend. Need new list of parents here.
+    # handle containers and custom objects
     has_done_conversion = False
     typehint = ""
     container_type = _base_type_name(pytree, JAXON_CONTAINER_TYPES, downcast_to_base_types)
@@ -362,7 +403,6 @@ def _to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_ba
         typehint = "#" + result[0] + typehint
         pytree = result[1]
         has_done_conversion = True
-        parent_objects += [pytree]
         container_type = _base_type_name(pytree, JAXON_CONTAINER_TYPES, downcast_to_base_types)
     if container_type is not None:
         typehint = container_type + typehint
@@ -370,19 +410,20 @@ def _to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_ba
         if isinstance(pytree, dict):
             data = JaxonDict()
             for i, (dict_key, dict_value) in enumerate(pytree.items()):
-                key_atom = to_atom(dict_key, allow_dill, dill_kwargs, downcast_to_base_types,
+                key_atom = _to_atom(dict_key, allow_dill, dill_kwargs, downcast_to_base_types,
                                    py_to_np_types, custom_marshalers, parent_objects,
-                                   f"{debug_path}.key({i})")
+                                   f"{debug_path}.key({i})", cached_atoms)
                 dbgstr = f"{debug_path}.{_key_to_debugstring(dict_key, i)}"
-                value_atom = to_atom(dict_value, allow_dill, dill_kwargs, downcast_to_base_types,
-                                     py_to_np_types, custom_marshalers, parent_objects, dbgstr)
+                value_atom = _to_atom(dict_value, allow_dill, dill_kwargs, downcast_to_base_types,
+                                     py_to_np_types, custom_marshalers, parent_objects, dbgstr,
+                                     cached_atoms)
                 data.data.append((key_atom, value_atom))
         else:
             data = JaxonList()
             for i, item in enumerate(pytree):
-                item_atom = to_atom(item, allow_dill, dill_kwargs, downcast_to_base_types,
+                item_atom = _to_atom(item, allow_dill, dill_kwargs, downcast_to_base_types,
                                     py_to_np_types, custom_marshalers, parent_objects,
-                                    f"{debug_path}({i})")
+                                    f"{debug_path}({i})", cached_atoms)
                 data.data.append(item_atom)
         return JaxonAtom(data, typehint)
     if has_done_conversion:
@@ -400,7 +441,12 @@ def _to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_ba
                      "serialized if allow_dill is set to True.")
 
 
-def _store_in_attrib(group, data, group_key):
+def _escape_attrib_path_ele(path: str) -> str:
+    return path.replace("\\", "\\\\").replace("/", "\\/")
+
+
+def _store_in_attrib(group, data: Any, group_key: str, atom: JaxonAtom,
+                     stored_atoms: dict[int, str], group_path: str) -> None:
     if isinstance(data, str):
         group.attrs[group_key] = _encode_string(data)
     elif isinstance(data, (*JAXON_PY_NUMERIC_TYPES, *JAXON_NP_NUMERIC_TYPES, np.ndarray,
@@ -408,13 +454,21 @@ def _store_in_attrib(group, data, group_key):
         group.attrs[group_key] = data
     else:
         assert False, f"unexpected internal jaxon data type {type(data)!r}"
+    attrib_path = group_path + _escape_attrib_path_ele(group_key)
+    stored_atoms[id(atom)] = attrib_path
 
 
-def _store_atom(group, atom, group_key, storage_hints):
+def _store_atom(group, atom, group_key, storage_hints, stored_atoms: dict[int, str],
+                group_path: str):
     """Recursively store the internal representation in the hd5f file."""
-    if atom.typehint is None:
-        _store_in_attrib(group, atom.data, group_key)
+    assert group_path[-1] == "/"
+    attrib_path = stored_atoms.get(id(atom), _JAXON_MISSING)
+    if attrib_path is not _JAXON_MISSING:
+        group.attrs[f"{group_key}:{JAXON_REF}"] = _encode_string(attrib_path)
+    elif atom.typehint is None:
+        _store_in_attrib(group, atom.data, group_key, atom, stored_atoms, group_path)
     elif isinstance(atom.data, JaxonDict):
+        sub_group_path = group_path + _escape_attrib_path_ele(group_key) + "/"
         sub_group = group.create_group(group_key, track_order=True)
         for i, (key_atom, value_atom) in enumerate(atom.data.data):
             if key_atom.is_simple():
@@ -425,22 +479,26 @@ def _store_atom(group, atom, group_key, storage_hints):
                 # in another group attribute.
                 group_key_of_value = f"{JAXON_DICT_VALUE}({i})"
                 group_key_of_key = f"{JAXON_DICT_KEY}({i})"
-                _store_atom(sub_group, key_atom, group_key_of_key, storage_hints)
-            _store_atom(sub_group, value_atom, group_key_of_value, storage_hints)
-        _store_in_attrib(group, atom.typehint, group_key)
+                _store_atom(sub_group, key_atom, group_key_of_key, storage_hints, stored_atoms,
+                            sub_group_path)
+            _store_atom(sub_group, value_atom, group_key_of_value, storage_hints, stored_atoms,
+                        sub_group_path)
+        _store_in_attrib(group, atom.typehint, group_key, atom, stored_atoms, group_path)
     elif isinstance(atom.data, JaxonList):
+        sub_group_path = group_path + _escape_attrib_path_ele(group_key) + "/"
         sub_group = group.create_group(group_key, track_order=True)
         for i, item_atom in enumerate(atom.data.data):
-            _store_atom(sub_group, item_atom, str(i), storage_hints)
-        _store_in_attrib(group, atom.typehint, group_key)
+            _store_atom(sub_group, item_atom, str(i), storage_hints, stored_atoms, sub_group_path)
+        _store_in_attrib(group, atom.typehint, group_key, atom, stored_atoms, group_path)
     elif isinstance(atom.data, (np.ndarray, memoryview)):
         storage_hint = storage_hints.get(atom.original_obj_id, None)
         if storage_hint is None or not storage_hint.store_in_dataset:
             # if it is desired to store the data in the attribute value
             # the typehint (which is always a string) must go into the group key
-            _store_in_attrib(group, atom.data, f"{group_key}:{atom.typehint}")
+            _store_in_attrib(group, atom.data, f"{group_key}:{atom.typehint}", atom, stored_atoms,
+                             group_path)
         else:
-            _store_in_attrib(group, atom.typehint, group_key)
+            _store_in_attrib(group, atom.typehint, group_key, atom, stored_atoms, group_path)
             group.create_dataset(group_key, data=atom.data)
     else:
         assert False, f"unexpected internal jaxon data type {type(atom.data)!r}"
@@ -497,7 +555,7 @@ def _get_group_key_and_typehint(group_key_with_typehint):
 def _load_data(group, attr_value, group_key_with_th, has_key_th):
     if has_key_th:
         # presence of a type hint in the key implies that the data resides
-        # in the attribute value (load it it if it's not already loaded)
+        # in the attribute value (load it if it is not already loaded)
         if attr_value is None:
             return group.attrs[group_key_with_th]
         return attr_value
@@ -513,7 +571,63 @@ def _parse_key_or_val(group_key: str, prefix: str) -> int:
 def _load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
           debug_path: str, custom_unmarshalers: tuple[Unmarshaler, ...],
           allow_missing_fields: bool, allow_unknown_fields: bool,
-          load_filter: LoadFilter, parents: list[PathElement]) -> PyTree:
+          load_filter: LoadFilter, parents: list[_PathElement], hdf5_path: tuple[str, ...],
+          loaded_objects: dict[tuple[str, ...], PyTree],
+          currently_loading_object: set[tuple[str, ...]]) -> PyTree:
+    """Wrapper for _do_load(...) that returns the reference if it is already loaded by using a
+    cache. Uses the ``hdf5_path`` as cache key. Raises an error if there is a circular reference
+    during loading."""
+    hdf5_path = (*hdf5_path, group_key_and_th)
+    result = loaded_objects.get(hdf5_path, _JAXON_MISSING)
+    if result is not _JAXON_MISSING:
+        # available in cache
+        return result
+    if hdf5_path in currently_loading_object:
+        raise CircularPyTreeException()
+    currently_loading_object.add(hdf5_path)
+    result = _do_load(group, group_key_and_th, allow_dill, dill_kwargs,
+        debug_path, custom_unmarshalers, allow_missing_fields, allow_unknown_fields,
+        load_filter, parents, hdf5_path, loaded_objects, currently_loading_object)
+    currently_loading_object.remove(hdf5_path)
+    if isinstance(result, _JaxonLoadedFromReferenceWrapper):
+        # indicates that the result was loaded from a reference
+        # since references to references are not allowed in jaxon
+        # it is not necessary to add the path to loaded_objects
+        result = result.pytree
+    else:
+        loaded_objects[hdf5_path] = result
+    return result
+
+
+def _tokenize_attrib_path(path: str) -> tuple[str]:
+    """Return a list of the path elements of the reference path. This essentially splits the
+    string at `/` while ignoring escaped `/` characters and unescaping the returned path
+    elements. This function also asserts that the path starts with a `/`."""
+    assert path[0] == "/", "attribute path must start with a /"
+    buf = ""
+    res = []
+    escape_next_char = False
+    for c in path[1:]:
+        if not escape_next_char:
+            if c == "\\":
+                escape_next_char = True
+                continue
+            if c == "/":
+                res.append(buf)
+                buf = ""
+                continue
+        escape_next_char = False
+        buf += c
+    res.append(buf)
+    return tuple(res)
+
+
+def _do_load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
+             debug_path: str, custom_unmarshalers: tuple[Unmarshaler, ...],
+             allow_missing_fields: bool, allow_unknown_fields: bool,
+             load_filter: LoadFilter, parents: list[_PathElement], hdf5_path: tuple[str, ...],
+             loaded_objects: dict[tuple[str, ...], PyTree],
+             currently_loading_object: set[tuple[str, ...]]) -> PyTree:
     """Recursively load the pytree from the hd5f file. Here, `group` is an h5py group object,
     the `group_key_and_th` is the group key (including a possible type hint) which must be
     a valid key in the group's attribute dict."""
@@ -544,6 +658,18 @@ def _load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
         th = th_or_data
 
     # handle arrays
+    if th == JAXON_REF:
+        # attribute cannot be loaded already as typehint is always
+        # in the keys for references
+        attrib_path = _decode_string(group.attrs[group_key_and_th])
+        attrib_path_eles = _tokenize_attrib_path(attrib_path)
+        target_group = group.file
+        for path_element in attrib_path_eles[:-1]:
+            target_group = target_group[path_element]
+        res = _load(target_group, attrib_path_eles[-1], allow_dill, dill_kwargs, debug_path,
+            custom_unmarshalers, allow_missing_fields, allow_unknown_fields, load_filter,
+            parents, attrib_path_eles[:-1], loaded_objects, currently_loading_object)
+        return _JaxonLoadedFromReferenceWrapper(res)
     if th == "bytes":
         return bytes(_load_data(group, attr_value, group_key_and_th, has_key_th))
     if th == "bytearray":
@@ -579,7 +705,8 @@ def _load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
                 dbgstr = f"{debug_path}.key({i})"
                 dict_key = _load(sub_group, sub_group_key, allow_dill, dill_kwargs,
                     dbgstr, custom_unmarshalers, allow_missing_fields, allow_unknown_fields,
-                    load_filter, parents + [_DICT_KEY_PATH_ELEMENT])
+                    load_filter, parents + [_DICT_KEY_PATH_ELEMENT], hdf5_path, loaded_objects,
+                    currently_loading_object)
                 continue
             if sub_group_key.startswith(JAXON_DICT_VALUE):
                 index_in_value_key = _parse_key_or_val(sub_group_key, JAXON_DICT_VALUE)
@@ -597,12 +724,14 @@ def _load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
             dbgstr = f"{debug_path}.{_key_to_debugstring(dict_key, i)}"
             pytree[dict_key] = _load(sub_group, sub_group_key, allow_dill, dill_kwargs,
                 dbgstr, custom_unmarshalers, allow_missing_fields, allow_unknown_fields,
-                load_filter, parents + [dict_key])
+                load_filter, parents + [dict_key], hdf5_path, loaded_objects,
+                currently_loading_object)
     elif types[0] in ("list", "tuple", "set", "frozenset"):
         sub_group = group[group_key_and_th]
         pytree = [_load(sub_group, sub_group_key, allow_dill, dill_kwargs, f"{debug_path}({i})",
                         custom_unmarshalers, allow_missing_fields, allow_unknown_fields,
-                        load_filter, parents + [i])
+                        load_filter, parents + [i], hdf5_path, loaded_objects,
+                        currently_loading_object)
                   for i, sub_group_key in enumerate(sub_group.attrs)]
         if types[0] == "tuple":
             pytree = tuple(pytree)
@@ -698,8 +827,8 @@ def save(path_or_file, pytree: PyTree,
         storage_hints_converted = {id(obj): hint for obj, hint in storage_hints}
     if dill_kwargs is None:
         dill_kwargs = {}
-    root_atom = to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types,
-                        py_to_np_types, custom_marshalers, [], "")
+    root_atom = _to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types,
+                         py_to_np_types, custom_marshalers, tuple(), "", {})
     if hasattr(path_or_file, "seek") and hasattr(path_or_file, "truncate"):
         # when a file like object is provided
         # the file must be truncated like this because the "w"
@@ -707,7 +836,7 @@ def save(path_or_file, pytree: PyTree,
         path_or_file.seek(0)
         path_or_file.truncate()
     with h5py.File(path_or_file, 'w', track_order=True) as file:
-        _store_atom(file, root_atom, JAXON_ROOT_GROUP_KEY, storage_hints_converted)
+        _store_atom(file, root_atom, JAXON_ROOT_GROUP_KEY, storage_hints_converted, {}, "/")
 
 
 def load(path_or_file, allow_dill: bool = False, dill_kwargs: dict | None = None,
@@ -765,4 +894,4 @@ def load(path_or_file, allow_dill: bool = False, dill_kwargs: dict | None = None
             load_filter = lambda path: True
         return _load(file, group_key, allow_dill, dill_kwargs, "",
             tuple(custom_unmarshalers), allow_missing_fields, allow_unknown_fields,
-            load_filter, [])
+            load_filter, [], tuple(), {}, set())
