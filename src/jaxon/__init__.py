@@ -175,13 +175,15 @@ def _create_instance(qualified_name: str):
 
 def _range_from_repr(repr_content):
     fields = repr_content.split(",")
-    assert len(fields) in (2, 3)
+    if len(fields) not in (2, 3):
+        raise ValueError(f"cannot parse range representation: {repr_content!r}")
     return range(*[int(f) for f in fields])
 
 
 def _slice_from_repr(repr_content):
     fields = repr_content.split(",")
-    assert len(fields) == 3
+    if len(fields) != 3:
+        raise ValueError(f"cannot parse slice representation: {repr_content!r}")
     return slice(*[(None if f == "None" else int(f)) for f in fields])
 
 
@@ -190,7 +192,7 @@ def _bool_from_repr(repr_content):
         return True
     if repr_content == "False":
         return False
-    assert False, f"unexpected boolean string representation: {repr_content!r}"
+    raise ValueError(f"unexpected boolean string representation: {repr_content!r}")
 
 
 def _base_type_name(obj, types, downcast_to_base_types):
@@ -297,7 +299,7 @@ def _unmarshal_custom_obj(qualified_name: str, container: PyTree,
 
 
 def _to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_base_types: tuple,
-             py_to_np_types: tuple, custom_marshalers: tuple[Marshaler],
+             py_to_np_types: tuple, custom_marshalers: tuple[Marshaler, ...],
              parent_objects: tuple[PyTree, ...], debug_path: str,
              cached_atoms: dict[int, JaxonAtom]) -> JaxonAtom:
     """Recursively convert ``pytree`` to the internal representation. This function handles caching,
@@ -367,7 +369,7 @@ def _to_atom_non_reference_type(pytree: PyTree, downcast_to_base_types: tuple,
 
 
 def _to_atom_reference_type(pytree: PyTree, allow_dill: bool, dill_kwargs: dict,
-        downcast_to_base_types: tuple, py_to_np_types: tuple, custom_marshalers: tuple[Marshaler],
+        downcast_to_base_types: tuple, py_to_np_types: tuple, custom_marshalers: tuple[Marshaler, ...],
         parent_objects: tuple[PyTree, ...], debug_path: str,
         cached_atoms: dict[int, JaxonAtom]) -> JaxonAtom:
     """Convert ``pytree`` recursively to the internal representation. Should only be called if
@@ -515,8 +517,8 @@ def _simple_atom_from_data_str(typehint_or_data: str):
     if typehint_or_data == JAXON_ELLIPSIS:
         return True, ...
     if typehint_or_data[0] == "'":
-        assert len(typehint_or_data) >= 2 and typehint_or_data[-1] == "'", \
-               "string parsing error: unexpected termination"
+        if len(typehint_or_data) < 2 or typehint_or_data[-1] != "'":
+            raise ValueError(f"cannot parse string: unexpected termination in {typehint_or_data!r}")
         return True, typehint_or_data[1:-1]
     other_repr_types = [(int, None), (float, None), (bool, _bool_from_repr), (complex, None),
                         (range, _range_from_repr), (slice, _slice_from_repr)]
@@ -525,8 +527,8 @@ def _simple_atom_from_data_str(typehint_or_data: str):
         type_name = primitive.__name__
         if not typehint_or_data.startswith(type_name):
             continue
-        assert typehint_or_data[len(type_name)] == "(" and typehint_or_data[-1] == ")", \
-               "primitive parsing error"
+        if typehint_or_data[len(type_name)] != "(" or typehint_or_data[-1] != ")":
+            raise ValueError(f"cannot parse {type_name} representation: {typehint_or_data!r}")
         repr_content = typehint_or_data[len(type_name) + 1:-1]
         if parser is not None:
             return True, parser(repr_content)
@@ -759,7 +761,7 @@ def save(path_or_file, pytree: PyTree,
          allow_dill: bool = False,
          dill_kwargs: dict | None = None,
          storage_hints: Iterable[tuple[Any, JaxonStorageHints]] | None = None,
-         custom_marshalers: tuple[Marshaler] = tuple()) -> None:
+         custom_marshalers: tuple[Marshaler, ...] = tuple()) -> None:
     """
     Save a pytree in a human readable format in an hd5f file with the specified path or
     write it to the provided file object. If the file already exists (or a file object is
@@ -827,6 +829,7 @@ def save(path_or_file, pytree: PyTree,
         storage_hints_converted = {id(obj): hint for obj, hint in storage_hints}
     if dill_kwargs is None:
         dill_kwargs = {}
+    custom_marshalers = tuple(custom_marshalers)
     root_atom = _to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types,
                          py_to_np_types, custom_marshalers, tuple(), "", {})
     if hasattr(path_or_file, "seek") and hasattr(path_or_file, "truncate"):

@@ -99,10 +99,10 @@ def tree_equal(t1, t2, downcast_to_base_types=tuple(), py_to_np_types=tuple(), c
                 try:
                     tree_equal(x, y, downcast_to_base_types, py_to_np_types, checked_objects_t1, checked_objects_t2)
                 except AssertionError:
-                    pass
+                    continue
                 break
             else:
-                assert False
+                assert False, f"frozenset/set element {x!r} exists in t1 but not found in t2"
             unmatched.remove(y)
     elif isinstance(t1, JaxonPyTreeTestNode):
         assert isinstance(t2, JaxonPyTreeTestNode)
