@@ -8,17 +8,14 @@
 ## Commands
 
 ```bash
-# Run all tests
-python -m unittest tests.tests
+# Run all tests (no installation required)
+PYTHONPATH=src python -m unittest tests.tests
 
 # Run a single test class
-python -m unittest tests.tests.RoundtripTests
+PYTHONPATH=src python -m unittest tests.tests.RoundtripTests
 
 # Run a single test method
-python -m unittest tests.tests.RoundtripTests.test_simple_types
-
-# Install in editable mode
-pip install -e .
+PYTHONPATH=src python -m unittest tests.tests.RoundtripTests.test_simple_types
 
 # Build
 python -m build

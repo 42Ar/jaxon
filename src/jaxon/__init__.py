@@ -236,7 +236,8 @@ def _marshal_custom_obj(pytree: PyTree, custom_marshalers: tuple[Marshaler, ...]
 
 def _unmarshal_dataclass(container: PyTree, instance: PyTree, allow_missing_fields: bool,
         allow_unknown_fields: bool) -> PyTree:
-    assert type(container) is dict, "expected dict container for dataclass"
+    if type(container) is not dict:
+        raise JaxonError("expected dict container for dataclass")
     fields = dataclasses.fields(instance)
     field_names = {f.name for f in fields}
     available_field_names = container.keys()
@@ -541,7 +542,8 @@ def _get_group_key_and_typehint(group_key_with_typehint):
     # attention must be paid here as the colons (which separate the typehint)
     # are not escaped in strings
     if group_key_with_typehint[-1] == "'":
-        assert group_key_with_typehint[0] == "'", "string format error"
+        if group_key_with_typehint[0] != "'":
+            raise JaxonError("string format error")
         # single string without typehint
         return group_key_with_typehint, None
     for i in reversed(range(len(group_key_with_typehint))):
@@ -566,7 +568,8 @@ def _load_data(group, attr_value, group_key_with_th, has_key_th):
 
 
 def _parse_key_or_val(group_key: str, prefix: str) -> int:
-    assert group_key[len(prefix)] == "(", f"malformed group key {group_key!r}"
+    if group_key[len(prefix)] != "(":
+        raise JaxonError(f"malformed group key {group_key!r}")
     return int(group_key[len(prefix) + 1:group_key.find(")")])
 
 
@@ -604,8 +607,9 @@ def _load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
 def _tokenize_attrib_path(path: str) -> tuple[str]:
     """Return a list of the path elements of the reference path. This essentially splits the
     string at `/` while ignoring escaped `/` characters and unescaping the returned path
-    elements. This function also asserts that the path starts with a `/`."""
-    assert path[0] == "/", "attribute path must start with a /"
+    elements. This function also checks that the path starts with a `/`."""
+    if path[0] != "/":
+        raise JaxonError("attribute path must start with a /")
     buf = ""
     res = []
     escape_next_char = False
@@ -649,9 +653,12 @@ def _do_load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
         # the attr_value either encodes the typehint or data
         attr_dtype = group.attrs.get_id(group_key_and_th).dtype
         string_dtype = h5py.check_string_dtype(attr_dtype)
-        assert string_dtype is not None, "unexpected hdf5 attribute type"
-        assert string_dtype.length is not None, "expected a fixed length string"
-        assert string_dtype.encoding == "utf-8", "unexpected string encoding"
+        if string_dtype is None:
+            raise JaxonError("unexpected hdf5 attribute type")
+        if string_dtype.length is None:
+            raise JaxonError("expected a fixed length string")
+        if string_dtype.encoding != "utf-8":
+            raise JaxonError("unexpected string encoding")
         th_or_data = _decode_string(attr_value)
         is_simple_atom, pytree = _simple_atom_from_data_str(th_or_data)
         if is_simple_atom:
@@ -700,10 +707,12 @@ def _do_load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
         dict_key_index, dict_key = None, None
         for i, sub_group_key in enumerate(sub_group.attrs):
             if sub_group_key.startswith(JAXON_DICT_KEY):
-                assert dict_key_index is None, f"expected {JAXON_DICT_KEY}({i}) to be " \
-                    f"followed immediately by {JAXON_DICT_VALUE}({i}) while parsing {debug_path!r}"
+                if dict_key_index is not None:
+                    raise JaxonError(f"expected {JAXON_DICT_KEY}({i}) to be "
+                        f"followed immediately by {JAXON_DICT_VALUE}({i}) while parsing {debug_path!r}")
                 dict_key_index = _parse_key_or_val(sub_group_key, JAXON_DICT_KEY)
-                assert len(pytree) == dict_key_index, f"group key index error on {debug_path!r}"
+                if len(pytree) != dict_key_index:
+                    raise JaxonError(f"group key index error on {debug_path!r}")
                 dbgstr = f"{debug_path}.key({i})"
                 dict_key = _load(sub_group, sub_group_key, allow_dill, dill_kwargs,
                     dbgstr, custom_unmarshalers, allow_missing_fields, allow_unknown_fields,
@@ -712,17 +721,19 @@ def _do_load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
                 continue
             if sub_group_key.startswith(JAXON_DICT_VALUE):
                 index_in_value_key = _parse_key_or_val(sub_group_key, JAXON_DICT_VALUE)
-                assert dict_key_index is not None and index_in_value_key == dict_key_index, \
-                    f"expected {JAXON_DICT_VALUE}({i}) to be followed immediately by " \
-                    f"{JAXON_DICT_KEY}({i}) while parsing {debug_path!r}"
+                if dict_key_index is None or index_in_value_key != dict_key_index:
+                    raise JaxonError(f"expected {JAXON_DICT_VALUE}({i}) to be followed immediately by "
+                        f"{JAXON_DICT_KEY}({i}) while parsing {debug_path!r}")
                 dict_key_index = None
             else:
                 # assume that the key is a simple atom (fully represented by sub_group_key)
-                assert dict_key_index is None, "did not expect presence of a " \
-                    f"{JAXON_DICT_KEY}({i}) while parsing {debug_path!r}"
+                if dict_key_index is not None:
+                    raise JaxonError("did not expect presence of a "
+                        f"{JAXON_DICT_KEY}({i}) while parsing {debug_path!r}")
                 sub_group_key_data, _ = _get_group_key_and_typehint(sub_group_key)
                 is_simple_atom, dict_key = _simple_atom_from_data_str(sub_group_key_data)
-                assert is_simple_atom, f"expected simple atom for sub group key {sub_group_key!r}"
+                if not is_simple_atom:
+                    raise JaxonError(f"expected simple atom for sub group key {sub_group_key!r}")
             dbgstr = f"{debug_path}.{_key_to_debugstring(dict_key, i)}"
             pytree[dict_key] = _load(sub_group, sub_group_key, allow_dill, dill_kwargs,
                 dbgstr, custom_unmarshalers, allow_missing_fields, allow_unknown_fields,
@@ -890,7 +901,8 @@ def load(path_or_file, allow_dill: bool = False, dill_kwargs: dict | None = None
         # a type hint might have been added to the JAXON_ROOT_GROUP_KEY
         group_key = next((group_key for group_key in file.attrs
                           if group_key.startswith(JAXON_ROOT_GROUP_KEY)), None)
-        assert group_key is not None, "jaxon root group not found"
+        if group_key is None:
+            raise JaxonError("jaxon root group not found")
         if dill_kwargs is None:
             dill_kwargs = {}
         if load_filter is None:
