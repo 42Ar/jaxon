@@ -359,11 +359,8 @@ def _to_atom_non_reference_type(pytree: PyTree, downcast_to_base_types: tuple,
         return JaxonAtom(f"{py_numeric_type}({rep})")
     if isinstance(pytree, (range, slice)):  # range, slice cannot be subclassed;
                                             # so downcast_to_base_types is irrelevant
-        typehint = repr(pytree)
-        if isinstance(pytree, (range, slice)):
-            # remove unnecessary spaces which would cause parsing to fail
-            typehint = typehint.replace(" ", "")
-        return JaxonAtom(typehint)
+        # remove unnecessary spaces which would cause parsing to fail
+        return JaxonAtom(repr(pytree).replace(" ", ""))
 
     # can not be a small object
     return _JAXON_MISSING
