@@ -214,6 +214,16 @@ class RoundtripTests(unittest.TestCase):
         for exact_python_numeric_types in (False, True):
             self.run_roundtrip_test(pytree, exact_python_numeric_types)
 
+    def test_platform_specific_scalar_types(self):
+        """np.longdouble and np.clongdouble scalars must round-trip on every platform."""
+        pytree = {
+            "longdouble": np.longdouble(1.5),
+            "clongdouble": np.clongdouble(1.5 + 2.5j),
+            "longdouble_array": np.array([1.0, 2.0], dtype=np.longdouble),
+            "clongdouble_array": np.array([1.0+2j, 3.0+4j], dtype=np.clongdouble),
+        }
+        self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
+
     def test_ararys(self):
         nprng = np.random.default_rng(42)
         def random_complex(scalar_type):
