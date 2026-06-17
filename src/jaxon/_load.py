@@ -359,14 +359,14 @@ def _do_load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
             if sub_group_key.startswith(JAXON_DICT_VALUE):
                 index_in_value_key = _parse_key_or_val(sub_group_key, JAXON_DICT_VALUE)
                 if dict_key_index is None or index_in_value_key != dict_key_index:
-                    raise JaxonError(f"expected {JAXON_DICT_VALUE}({i}) to be followed immediately by "
-                        f"{JAXON_DICT_KEY}({i}) while parsing {debug_path!r}")
+                    raise JaxonError(f"encountered {JAXON_DICT_VALUE}({index_in_value_key}) without a "
+                        f"preceding matching {JAXON_DICT_KEY} while parsing {debug_path!r}")
                 dict_key_index = None
             else:
                 # assume that the key is a simple atom (fully represented by sub_group_key)
                 if dict_key_index is not None:
-                    raise JaxonError("did not expect presence of a "
-                        f"{JAXON_DICT_KEY}({i}) while parsing {debug_path!r}")
+                    raise JaxonError(f"expected {JAXON_DICT_VALUE}({dict_key_index}) but got simple "
+                        f"key attribute {sub_group_key!r} while parsing {debug_path!r}")
                 sub_group_key_data, _ = _get_group_key_and_typehint(sub_group_key)
                 is_simple_atom, dict_key = _simple_atom_from_data_str(sub_group_key_data)
                 if not is_simple_atom:
