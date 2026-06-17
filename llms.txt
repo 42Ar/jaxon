@@ -1,0 +1,213 @@
+# Jaxon
+
+Jaxon is a Python library (requires Python >= 3.12) for saving and loading arbitrary
+nested data structures ("pytrees") to HDF5 files. It preserves type information,
+reference identity, and is self-describing — HDF5 files can be inspected with
+standard tools even without the original code.
+
+Source: https://github.com/42Ar/jaxon
+PyPI: https://pypi.org/project/jaxon/
+License: GPLv3
+
+
+## Installation
+
+```
+pip install jaxon
+```
+
+
+## Public API
+
+The entire public API is two functions:
+
+```python
+from jaxon import save, load
+```
+
+
+### save
+
+```python
+def save(
+    path_or_file,                          # str | Path | file-like object
+    pytree,                                # the object to save
+    exact_python_numeric_types: bool = True,  # if False, int/float/bool/complex -> numpy types
+    downcast_to_base_types=None,           # iterable of types; subclasses are stored as the base type
+    py_to_np_types=None,                   # iterable of Python numeric types to convert to numpy
+    allow_dill: bool = False,              # serialize unsupported types with dill
+    dill_kwargs: dict | None = None,       # kwargs passed to dill.dumps
+    storage_hints=None,                    # iterable of (object, JaxonStorageHints) pairs
+    custom_marshalers=(),                  # iterable of Marshaler callables
+) -> None
+```
+
+Saves `pytree` to an HDF5 file. Overwrites the file if it already exists.
+`path_or_file` can be a file path (str or Path) or any file-like object with
+`read`, `write`, `seek`, `tell`, `truncate`, and `flush`.
+
+
+### load
+
+```python
+def load(
+    path_or_file,                          # str | Path | file-like object
+    allow_dill: bool = False,              # allow loading dill-serialized objects
+    dill_kwargs: dict | None = None,       # kwargs passed to dill.loads
+    custom_unmarshalers=(),                # iterable of Unmarshaler callables
+    allow_missing_fields: bool = False,    # ignore fields in file absent from dataclass
+    allow_unknown_fields: bool = False,    # fill fields in dataclass absent from file with default or JAXON_NOT_LOADED
+    load_filter=None,                      # callable(path: list) -> bool; return False to skip a node
+) -> object
+```
+
+Loads and returns the pytree from an HDF5 file produced by `save`.
+
+
+## Supported types
+
+Any nesting of the following types is supported as a pytree:
+
+- **Containers**: `list`, `tuple`, `dict`, `set`, `frozenset`
+- **Strings**: `str`
+- **Python numerics**: `int`, `float`, `bool`, `complex`
+  (stored as strings by default; as binary numpy types if `exact_python_numeric_types=False`)
+- **Python singletons**: `None`, `Ellipsis` (`...`)
+- **Python sequences**: `slice`, `range`
+- **Byte buffers**: `bytes`, `bytearray`, `memoryview`
+- **NumPy arrays**: `np.ndarray` (all dtypes)
+- **JAX arrays**: `jax.Array`
+- **NumPy scalars**: `np.bool_`, `np.int8/16/32/64`, `np.uint8/16/32/64`,
+  `np.float16/32/64`, `np.complex64/128`, `np.longdouble`, `np.clongdouble`
+- **Dataclasses**: any `@dataclass` — fields are stored by name; class is
+  reconstructed via `__new__` without calling `__init__`
+- **Custom types**: via `to_jaxon`/`from_jaxon` methods, `custom_marshalers`
+  callables, or `dill` as a last resort
+
+Dictionary keys can themselves be any supported type (including custom objects).
+Circular references are detected and raise `CircularPyTreeException`.
+
+
+## Reference identity
+
+Object identity is preserved across save/load. If the same object appears at
+multiple locations in the pytree, `loaded["a"] is loaded["b"]` will be `True`
+after the roundtrip.
+
+
+## Quick example
+
+```python
+import numpy as np
+import jax.numpy as jnp
+from jaxon import save, load
+
+a = np.array([1.0, 2.0, 3.0])
+pytree = {
+    "weights": a,
+    "weights_ref": a,          # same object — identity preserved on load
+    "labels": ["cat", "dog"],
+    "count": 42,
+    "array": jnp.zeros((3, 3)),
+}
+
+save("data.hdf5", pytree)
+result = load("data.hdf5")
+assert result["weights"] is result["weights_ref"]  # True
+```
+
+
+## Dataclass example
+
+```python
+from dataclasses import dataclass
+import numpy as np
+from jaxon import save, load
+
+@dataclass
+class Model:
+    weights: np.ndarray
+    bias: float
+    name: str
+
+save("model.hdf5", Model(np.eye(3), 0.5, "linear"))
+model = load("model.hdf5")
+# model is a Model instance with all fields restored
+```
+
+
+## Custom type example
+
+```python
+from jaxon import save, load
+
+class MyModel:
+    def __init__(self, weights, lr):
+        self.weights = weights
+        self.lr = lr
+
+    def to_jaxon(self):
+        return {"weights": self.weights, "lr": self.lr}
+
+    def from_jaxon(self, data):
+        self.weights = data["weights"]
+        self.lr = data["lr"]
+
+save("model.hdf5", MyModel(np.eye(3), 0.01))
+model = load("model.hdf5")   # MyModel instance
+```
+
+
+## Partial loading
+
+```python
+from jaxon import load, has_common_prefix, JAXON_NOT_LOADED
+
+# Only load the "weights" subtree; everything else becomes JAXON_NOT_LOADED
+result = load(
+    "model.hdf5",
+    load_filter=lambda path: has_common_prefix(["weights"], path),
+)
+```
+
+
+## Schema evolution (dataclasses)
+
+```python
+# Fields added to the class since the file was written:
+result = load("model.hdf5", allow_unknown_fields=True)
+# result.new_field is JAXON_NOT_LOADED or the field's default value
+
+# Fields removed from the class since the file was written:
+result = load("model.hdf5", allow_missing_fields=True)
+```
+
+
+## Storage hints
+
+```python
+from jaxon import save, JaxonStorageHints
+
+big = np.zeros((10000, 10000))
+save("data.hdf5", {"big": big},
+     storage_hints=[(big, JaxonStorageHints(store_in_dataset=True))])
+# big is stored as an HDF5 dataset instead of an attribute
+```
+
+
+## Key public symbols
+
+| Symbol | Kind | Purpose |
+|--------|------|---------|
+| `save` | function | Save a pytree to HDF5 |
+| `load` | function | Load a pytree from HDF5 |
+| `JAXON_NOT_LOADED` | sentinel | Placeholder for skipped/missing values |
+| `JaxonNotLoaded` | type | Type of `JAXON_NOT_LOADED`; use for `isinstance` checks |
+| `JaxonStorageHints` | dataclass | Controls attribute vs. dataset storage |
+| `JaxonError` | exception | Base class for all jaxon errors |
+| `CircularPyTreeException` | exception | Raised on circular references during save |
+| `JaxonFormatWarning` | warning | Emitted on schema mismatches during load |
+| `has_common_prefix` | function | Utility for building `load_filter` callables |
+| `Marshaler` | type alias | `Callable[[object], tuple[str, object] | None]` |
+| `Unmarshaler` | type alias | `Callable[[str, object], object | None]` |
+| `LoadFilter` | type alias | `Callable[[list], bool]` |
