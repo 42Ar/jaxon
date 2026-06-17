@@ -56,7 +56,7 @@ def tree_equal(t1, t2, downcast_to_base_types=tuple(), py_to_np_types=tuple(), c
         pass
     else:
         # normally, types must be exactly the same
-        assert type(t1) == type(t2)
+        assert type(t1) is type(t2)
     
     # check if reference in both trees are the same
     if checked_objects_t1 is None or checked_objects_t2 is None:

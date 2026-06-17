@@ -1,7 +1,7 @@
 """
-test_util.py
+tests.py
 
-Contains tests for the core functionality implemented in jaxon.__init__.py
+Contains tests for the core functionality implemented in jaxon.
 
 Author
 ------
@@ -26,8 +26,8 @@ from .test_util import tree_equal, JaxonPyTreeTestNode
 
 
 TEST_TYPES = (np.int8, np.uint8, np.int16, np.uint16, np.int32, np.uint32, np.int64,
-              np.uint64, np.float16, np.float32, np.float64, np.bool)
-TEST_TYPES_FOR_COMPELX = (np.float32, np.float64)
+              np.uint64, np.float16, np.float32, np.float64, np.bool_)
+TEST_TYPES_FOR_COMPLEX = (np.float32, np.float64)
 
 
 class TestObjectForDill(JaxonPyTreeTestNode):
@@ -194,7 +194,7 @@ class RoundtripTests(unittest.TestCase):
             "float64": np.float64(3465.34),
             "int32": np.int32(487),
             "scalars": [scalar_type(0) for scalar_type in JAXON_NP_NUMERIC_TYPES],
-            "npbool": np.bool(3465.34),
+            "npbool": np.bool_(3465.34),
             "complex128": np.complex128(123 + 32j),
             "key/with/slashes": {
                 "more/slahes": 5
@@ -224,7 +224,7 @@ class RoundtripTests(unittest.TestCase):
         }
         self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
 
-    def test_ararys(self):
+    def test_arrays(self):
         nprng = np.random.default_rng(42)
         def random_complex(scalar_type):
             real = nprng.uniform(size=(4, 2, 3)).astype(scalar_type)
@@ -236,8 +236,8 @@ class RoundtripTests(unittest.TestCase):
             "int64": (nprng.uniform(size=(4, 2, 3))*100).astype(np.int64),
             "other": [(nprng.uniform(size=(4, 2, 3))*100).astype(scalar_type) for scalar_type in TEST_TYPES],
             "jax":  [jnp.array((nprng.uniform(size=(4, 2, 3))*100).astype(scalar_type)) for scalar_type in TEST_TYPES],
-            "complex": [random_complex(scalar_type) for scalar_type in TEST_TYPES_FOR_COMPELX],
-            "complex_jax": [jnp.array(random_complex(scalar_type)) for scalar_type in TEST_TYPES_FOR_COMPELX]
+            "complex": [random_complex(scalar_type) for scalar_type in TEST_TYPES_FOR_COMPLEX],
+            "complex_jax": [jnp.array(random_complex(scalar_type)) for scalar_type in TEST_TYPES_FOR_COMPLEX]
         }
         for exact_python_numeric_types in (False, True):
             self.run_roundtrip_test(pytree, exact_python_numeric_types)
@@ -268,7 +268,7 @@ class RoundtripTests(unittest.TestCase):
         self.assertEqual(type(out["int"]), np.int64)
         self.assertEqual(type(out["float"]), np.float64)
         self.assertEqual(type(out["complex"]), np.complex128)
-        self.assertEqual(type(out["bool"]), np.bool)
+        self.assertEqual(type(out["bool"]), np.bool_)
 
     def test_type_downcast(self):
         class TestInt(int):
@@ -349,7 +349,7 @@ class RoundtripTests(unittest.TestCase):
         self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
 
     def test_single_big_key_value(self):
-        pytree = {self.rand_string(42, 1000000), "val"}
+        pytree = {self.rand_string(42, 1000000): 42}
         self.run_roundtrip_test(pytree, exact_python_numeric_types=True)
 
     def test_multi_big_key_value(self):
