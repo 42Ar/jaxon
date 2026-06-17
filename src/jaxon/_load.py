@@ -51,17 +51,17 @@ def _create_instance(qualified_name: str):
 
 
 def _range_from_repr(repr_content):
-    fields = repr_content.split(",")
-    if len(fields) not in (2, 3):
+    parts = repr_content.split(",")
+    if len(parts) not in (2, 3):
         raise ValueError(f"cannot parse range representation: {repr_content!r}")
-    return range(*[int(f) for f in fields])
+    return range(*[int(f) for f in parts])
 
 
 def _slice_from_repr(repr_content):
-    fields = repr_content.split(",")
-    if len(fields) != 3:
+    parts = repr_content.split(",")
+    if len(parts) != 3:
         raise ValueError(f"cannot parse slice representation: {repr_content!r}")
-    return slice(*[(None if f == "None" else int(f)) for f in fields])
+    return slice(*[(None if f == "None" else int(f)) for f in parts])
 
 
 def _bool_from_repr(repr_content):
@@ -73,7 +73,7 @@ def _bool_from_repr(repr_content):
 
 
 def _decode_string(buffer):
-    """All string are stored as utf-8 fixed length strings."""
+    """All strings are stored as utf-8 fixed length strings."""
     return buffer.decode("utf-8")
 
 
@@ -101,7 +101,7 @@ def _unmarshal_dataclass(container: PyTree, instance: PyTree, allow_missing_fiel
         if allow_unknown_fields:
             warnings.warn(message, JaxonFormatWarning)
         else:
-            raise ValueError(message + "\n. To omit this error run with "
+            raise ValueError(message + ". To omit this error run with "
                 "allow_unknown_fields=True. Missing fields will be initialized using the "
                 "default_factory or default value. If both are missing JaxonNotLoaded will be "
                 "used as a placeholder. The __post_init__() logic is never triggered.")
@@ -269,7 +269,7 @@ def _do_load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
              load_filter: LoadFilter, parents: list[_PathElement], hdf5_path: tuple[str, ...],
              loaded_objects: dict[tuple[str, ...], PyTree],
              currently_loading_object: set[tuple[str, ...]]) -> PyTree:
-    """Recursively load the pytree from the hd5f file. Here, `group` is an h5py group object,
+    """Recursively load the pytree from the HDF5 file. Here, `group` is an h5py group object,
     the `group_key_and_th` is the group key (including a possible type hint) which must be
     a valid key in the group's attribute dict."""
     # dict keys are never filtered: _DICT_KEY_PATH_ELEMENT in parents means we are currently
@@ -397,7 +397,7 @@ def _do_load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
         if new_pytree is None:
             raise ValueError(f"cannot load custom object at {debug_path!r}, as type identified by "
                              f"{qualified_name!r} has no custom unmarshaler and its instance does "
-                             "not has the from_jaxon method and is not a dataclass")
+                             "not have the from_jaxon method and is not a dataclass")
         pytree = new_pytree
     return pytree
 
@@ -407,7 +407,7 @@ def load(path_or_file, allow_dill: bool = False, dill_kwargs: dict | None = None
          allow_missing_fields: bool = False, allow_unknown_fields: bool = False,
          load_filter: LoadFilter | None = None) -> PyTree:
     """
-    Load a pytree from an hd5f file. It must be in the format produced by the ``save`` function.
+    Load a pytree from an HDF5 file. It must be in the format produced by the ``save`` function.
 
     Parameters
     ----------
@@ -431,7 +431,7 @@ def load(path_or_file, allow_dill: bool = False, dill_kwargs: dict | None = None
         interface (if available) or the default implementation for dataclasses.
     allow_missing_fields: bool, default=False
         Do not raise an error if fields are present in the hdf5 file which do not have a
-        corresponding definition in the instanciated dataclass.
+        corresponding definition in the instantiated dataclass.
     allow_unknown_fields: bool, default=False
         Do not raise an error if fields are defined in a dataclass but are not found in
         the hdf5 file. The fields will be initialized using their default_factory or default

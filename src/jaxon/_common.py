@@ -42,15 +42,15 @@ JAXON_CONTAINER_TYPES = (list, tuple, dict, set, frozenset)  # supported python 
 JAXON_JAX_ARRAY_TYPE = type(jax.numpy.array([]))
 
 
-# the following are keywords which are used in the hd5f file
+# the following are keywords which are used in the HDF5 file
 JAXON_NONE = "None"  # used to encode python `None`
 JAXON_ELLIPSIS = "Ellipsis"  # used to encode python `...`
-JAXON_DICT_KEY = "key"  # used to indicate that this hd5f attribute stores
+JAXON_DICT_KEY = "key"  # used to indicate that this HDF5 attribute stores
                         # the key of another attribute in the same group
                         # (only used if necessary)
-JAXON_DICT_VALUE = "value" # used to indicate that this hd5f attribute stores
+JAXON_DICT_VALUE = "value" # used to indicate that this HDF5 attribute stores
                            # a dict value (only used iff `JAXON_DICT_KEY` is used)
-JAXON_ROOT_GROUP_KEY = "JAXON_ROOT"  # hd5f root group name (might be followed by typehint of
+JAXON_ROOT_GROUP_KEY = "JAXON_ROOT"  # HDF5 root group name (might be followed by typehint of
                                      # the root object)
 JAXON_REF = "ref"  # typehint that indicates a path to another object in the
                    # hdf5 file which maps to a python reference
@@ -138,20 +138,20 @@ class JaxonAtom:
     def is_simple(self) -> bool:
         """A simple atom encodes the data and typehint only into in the data field
         which must be a str that does not contain null chars. This means that
-        simple atoms can be used as group or attribute keys in the hd5f file."""
+        simple atoms can be used as group or attribute keys in the HDF5 file."""
         return self.typehint is None and type(self.data) is str and "\0" not in self.data
 
 
 @dataclass
 class JaxonStorageHints:
-    """If the field `store_in_dataset` is `True` the associated data will be stored in an hd5f
-    dataset. Otherwise, it will be stored in an hd5f attribute."""
+    """If the field `store_in_dataset` is `True` the associated data will be stored in an HDF5
+    dataset. Otherwise, it will be stored in an HDF5 attribute."""
     store_in_dataset: bool
 
 
 def has_common_prefix(path: Iterable, other_path: Iterable) -> bool:
     """Checks if the two Iterables start with the same values. If one of the Iterables
-    is longer then the additional items are ignored."""
+    is longer than the additional items are ignored."""
     return all(map(lambda ab: ab[0] == ab[1], zip(path, other_path)))
 
 
@@ -164,4 +164,4 @@ def _get_qualified_name(obj) -> str:
 def _key_to_debugstring(dict_key, i) -> str:
     if isinstance(dict_key, (str, int, float, bool, complex)):
         return repr(dict_key)
-    return f"{(i)}"
+    return f"{i}"

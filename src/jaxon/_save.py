@@ -48,7 +48,7 @@ def _base_type_name(obj, types, downcast_to_base_types):
 
 
 def _encode_string(string):
-    """All string are stored as utf-8 fixed length strings."""
+    """All strings are stored as utf-8 fixed length strings."""
     encoded = string.encode("utf-8")
     return np.array(encoded, dtype=h5py.string_dtype("utf-8", len(encoded)))
 
@@ -227,7 +227,7 @@ def _store_in_attrib(group, data: Any, group_key: str, atom: JaxonAtom,
 
 def _store_atom(group, atom: JaxonAtom, group_key: str, storage_hints: dict,
                 stored_atoms: dict[int, str], group_path: str) -> None:
-    """Recursively store the internal representation in the hd5f file."""
+    """Recursively store the internal representation in the HDF5 file."""
     assert group_path[-1] == "/"
     attrib_path = stored_atoms.get(id(atom), _JAXON_MISSING)
     if attrib_path is not _JAXON_MISSING:
@@ -242,7 +242,7 @@ def _store_atom(group, atom: JaxonAtom, group_key: str, storage_hints: dict,
                 group_key_of_value = key_atom.data
             else:
                 # If the dict key atom is not simple it cannot be used directly
-                # as the group key in the hd5f file. So it must be stored
+                # as the group key in the HDF5 file. So it must be stored
                 # in another group attribute.
                 group_key_of_value = f"{JAXON_DICT_VALUE}({i})"
                 group_key_of_key = f"{JAXON_DICT_KEY}({i})"
@@ -280,7 +280,7 @@ def save(path_or_file, pytree: PyTree,
          storage_hints: Iterable[tuple[Any, JaxonStorageHints]] | None = None,
          custom_marshalers: tuple[Marshaler, ...] = tuple()) -> None:
     """
-    Save a pytree in a human readable format in an hd5f file with the specified path or
+    Save a pytree in a human readable format in an HDF5 file with the specified path or
     write it to the provided file object. If the file already exists (or a file object is
     provided), it is truncated at the beginning.
 
@@ -296,8 +296,8 @@ def save(path_or_file, pytree: PyTree,
         dicts, etc. (see README)
     exact_python_numeric_types : bool, default=True
         If ``False``, the types ``int``, ``float``, ``bool`` and ``complex`` will be converted
-        implicitly to ``np.int64``, ``np.float64``, ``np.bool`` and ``np.complex128`` respectively
-        and stored as the corresponding hd5f binary type. If the file is loaded, the types will
+        implicitly to ``np.int64``, ``np.float64``, ``np.bool_`` and ``np.complex128`` respectively
+        and stored as the corresponding HDF5 binary type. If the file is loaded, the types will
         be the numpy (not python) types.
     downcast_to_base_types : Iterable
         If a superclass of a supported base type is encountered in the pytree and is contained in
