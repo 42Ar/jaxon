@@ -272,6 +272,8 @@ def _do_load(group, group_key_and_th: str, allow_dill: bool, dill_kwargs: dict,
     """Recursively load the pytree from the hd5f file. Here, `group` is an h5py group object,
     the `group_key_and_th` is the group key (including a possible type hint) which must be
     a valid key in the group's attribute dict."""
+    # dict keys are never filtered: _DICT_KEY_PATH_ELEMENT in parents means we are currently
+    # loading a dict key, which must always be loaded so the dict can be reconstructed.
     if not any(p is _DICT_KEY_PATH_ELEMENT for p in parents) and not load_filter(parents):
         return JAXON_NOT_LOADED
     _, th = _get_group_key_and_typehint(group_key_and_th)
@@ -442,7 +444,8 @@ def load(path_or_file, allow_dill: bool = False, dill_kwargs: dict | None = None
         otherwise. For dictionaries the path element is the loaded dict key object, for lists
         and set like objects it is the index of the element (of type ``int``) and for
         dataclasses it is the field name. If the pytree node or leaf is not loaded, it is
-        replaced with the constant ``JAXON_NOT_LOADED``.
+        replaced with the constant ``JAXON_NOT_LOADED``. Note: dict keys are always loaded
+        regardless of the filter — without them the dict cannot be reconstructed.
     """
     with h5py.File(path_or_file, 'r') as file:
         # a type hint might have been added to the JAXON_ROOT_GROUP_KEY
