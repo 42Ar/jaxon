@@ -36,7 +36,7 @@ print(load("data.hdf5"))
 ```
 Will produce
 ```
-{'mylist': ['foo', 'bar', 42], 'myset': {'z', 'a', 'b', (42, b'binary!')}, 'numpy_array': array([0, 1, 2]), 'jax_array': Array([0, 1, 2], dtype=int32)}
+{'mylist': ['foo', 'bar', 42], 'myset': {'b', 'a', (42, b'blob'), 'z'}, 'numpy_array': array([0, 1, 2]), 'jax_array': Array([0, 1, 2], dtype=int32)}
 ```
 which is exactly what was send in. Refer to the `tests` folder for more examples.
 To inspect the HDF5 file external tools like `h5dump` or `HDFView` can be used.
@@ -49,13 +49,13 @@ The `pytree` can consist of the following types:
 
 | Dataype                               | Stored As                                               |
 | ------------------------------------- | ------------------------------------------------------- |
-| list, tuple, dict, set, frozenset     | HD5F group                                              |
-| np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint16, np.uint32, np.uint64, np.float16, np.float32, np.float64, np.float128, np.complex64, np.complex128, np.bool | HD5F attribute |
+| list, tuple, dict, set, frozenset     | HDF5 group                                              |
+| np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint16, np.uint32, np.uint64, np.float16, np.float32, np.float64, np.longdouble, np.complex64, np.complex128, np.clongdouble, np.bool_ | HDF5 attribute |
 | int, float, bool, complex             | String representation, or one of the numpy types above if requested |
 | None, slice, range, Ellipsis          | String representation
-| str                                   | HD5F UTF-8 (fixed length) string                        |
-| np.ndarray, jax.Array, bytes, bytearray, memoryview | HD5F attribute (or dataset on user request) |
-| Any python dataclass                  | HD5F group, that contains all Fields                    |
+| str                                   | HDF5 UTF-8 (fixed length) string                        |
+| np.ndarray, jax.Array, bytes, bytearray, memoryview | HDF5 attribute (or dataset on user request) |
+| Any python dataclass                  | HDF5 group, that contains all Fields                    |
 
 Note that dictionary keys can also be of any of these types or a custom type (if its hashable,
 of course).
@@ -99,7 +99,7 @@ named in the hdf5 file produced by Jaxon.
 ### Serialization with dill
 As a last resort, Jaxon can serialize unsupported types using the `dill` library (basically an
 enhanced pickle) and store the result as a binary blob. This feature must be enabled by setting
-`allow_dill=True`. Note that human readability (through HD5F viewer) is lost for the pickled objects.
+`allow_dill=True`. Note that human readability (through HDF5 viewer) is lost for the pickled objects.
 
 
 ## Acknowledgements
