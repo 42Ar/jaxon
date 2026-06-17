@@ -83,12 +83,18 @@ class _JaxonLoadedFromReferenceWrapper:
     pytree: PyTree
 
 
-class JaxonNotLoaded:
-    """Placeholder object used to indicate an object that has not been loaded, either
-    on user request or because it is missing in the hdf5 file."""
+class _JaxonNotLoadedType:
+    """Type of the ``JAXON_NOT_LOADED`` sentinel. Not intended to be instantiated directly."""
+    __slots__ = ()
 
     def __repr__(self):
         return "JAXON_NOT_LOADED"
+
+    def __eq__(self, other):
+        return self is other
+
+    def __hash__(self):
+        return hash(type(self))
 
 
 class _DictKeyPathElement:
@@ -98,7 +104,8 @@ class _DictKeyPathElement:
         return "_DICT_KEY_PATH_ELEMENT"
 
 
-JAXON_NOT_LOADED = JaxonNotLoaded()
+JAXON_NOT_LOADED = _JaxonNotLoadedType()
+JaxonNotLoaded = _JaxonNotLoadedType  # public alias; use for isinstance checks
 _DICT_KEY_PATH_ELEMENT = _DictKeyPathElement()
 _JAXON_MISSING = _JaxonMissing()
 
