@@ -74,7 +74,7 @@ def _marshal_custom_obj(pytree: PyTree, custom_marshalers: tuple[Marshaler, ...]
 
 def _to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_base_types: tuple,
              py_to_np_types: tuple, custom_marshalers: tuple[Marshaler, ...],
-             parent_objects: tuple[PyTree, ...], debug_path: str,
+             parent_ids: frozenset[int], debug_path: str,
              cached_atoms: dict[int, JaxonAtom]) -> JaxonAtom:
     """Recursively convert ``pytree`` to the internal representation. This function handles caching,
     which also enables correct reconstruction of references during loading. Also, this function
@@ -88,11 +88,11 @@ def _to_atom(pytree: PyTree, allow_dill: bool, dill_kwargs: dict, downcast_to_ba
     result = cached_atoms.get(id(pytree), _JAXON_MISSING)
     if result is not _JAXON_MISSING:
         return result  # type: ignore (cannot be of type JaxonMissing)
-    if any(pytree is p for p in parent_objects):
+    if id(pytree) in parent_ids:
         raise CircularPyTreeException(f"detected circular reference in pytree at {debug_path!r}")
-    parent_objects = (*parent_objects, pytree)
+    parent_ids = parent_ids | {id(pytree)}
     atom = _to_atom_reference_type(pytree, allow_dill, dill_kwargs, downcast_to_base_types,
-        py_to_np_types, custom_marshalers, parent_objects, debug_path, cached_atoms)
+        py_to_np_types, custom_marshalers, parent_ids, debug_path, cached_atoms)
     atom = JaxonAtom(atom.data, atom.typehint, id(pytree))
     cached_atoms[id(pytree)] = atom
     return atom
@@ -135,7 +135,7 @@ def _to_atom_non_reference_type(pytree: PyTree, downcast_to_base_types: tuple,
 
 def _to_atom_reference_type(pytree: PyTree, allow_dill: bool, dill_kwargs: dict,
         downcast_to_base_types: tuple, py_to_np_types: tuple, custom_marshalers: tuple[Marshaler, ...],
-        parent_objects: tuple[PyTree, ...], debug_path: str,
+        parent_ids: frozenset[int], debug_path: str,
         cached_atoms: dict[int, JaxonAtom]) -> JaxonAtom:
     """Convert ``pytree`` recursively to the internal representation. Should only be called if
     ``_to_atom_non_reference_type`` returned ``JAXON_MISSING``."""
@@ -178,18 +178,18 @@ def _to_atom_reference_type(pytree: PyTree, allow_dill: bool, dill_kwargs: dict,
             data = JaxonDict()
             for i, (dict_key, dict_value) in enumerate(pytree.items()):
                 key_atom = _to_atom(dict_key, allow_dill, dill_kwargs, downcast_to_base_types,
-                                   py_to_np_types, custom_marshalers, parent_objects,
+                                   py_to_np_types, custom_marshalers, parent_ids,
                                    f"{debug_path}.key({i})", cached_atoms)
                 dbgstr = f"{debug_path}.{_key_to_debugstring(dict_key, i)}"
                 value_atom = _to_atom(dict_value, allow_dill, dill_kwargs, downcast_to_base_types,
-                                     py_to_np_types, custom_marshalers, parent_objects, dbgstr,
+                                     py_to_np_types, custom_marshalers, parent_ids, dbgstr,
                                      cached_atoms)
                 data.data.append((key_atom, value_atom))
         else:
             data = JaxonList()
             for i, item in enumerate(pytree):
                 item_atom = _to_atom(item, allow_dill, dill_kwargs, downcast_to_base_types,
-                                    py_to_np_types, custom_marshalers, parent_objects,
+                                    py_to_np_types, custom_marshalers, parent_ids,
                                     f"{debug_path}({i})", cached_atoms)
                 data.data.append(item_atom)
         return JaxonAtom(data, typehint)
@@ -348,7 +348,7 @@ def save(path_or_file, pytree: PyTree,
         dill_kwargs = {}
     custom_marshalers = tuple(custom_marshalers)
     root_atom = _to_atom(pytree, allow_dill, dill_kwargs, downcast_to_base_types,
-                         py_to_np_types, custom_marshalers, tuple(), "", {})
+                         py_to_np_types, custom_marshalers, frozenset(), "", {})
     if hasattr(path_or_file, "seek") and hasattr(path_or_file, "truncate"):
         # when a file like object is provided
         # the file must be truncated like this because the "w"
