@@ -2,7 +2,11 @@
 
 ## Structure
 
-- **Single-module package**: all source lives in `src/jaxon/__init__.py`. The public API is the `save()` and `load()` functions.
+- **Four-module package** under `src/jaxon/`:
+  - `_common.py` — constants, type aliases, exceptions, internal data classes, shared utilities
+  - `_save.py` — pytree→atom conversion and HDF5 writing; contains `save()`
+  - `_load.py` — HDF5 reading and atom→pytree reconstruction; contains `load()`
+  - `__init__.py` — public re-exports and `__all__`; the public API is `save()` and `load()`
 - **Tests** in `tests/tests.py` (unittest, no pytest), with `tests/test_util.py` providing `tree_equal()` and `JaxonPyTreeTestNode`.
 
 ## Commands
