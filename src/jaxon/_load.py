@@ -88,7 +88,7 @@ def _unmarshal_dataclass(container: PyTree, instance: PyTree, allow_missing_fiel
     if missing_fields:
         message = f"The following fields in {_get_qualified_name(instance)!r} are present in " \
                    "the hdf5 file but are missing in the class " \
-                  f"definition: {", ".join(missing_fields)}"
+                  f"definition: {', '.join(missing_fields)}"
         if allow_missing_fields:
             warnings.warn(message, JaxonFormatWarning)
         else:
@@ -97,7 +97,7 @@ def _unmarshal_dataclass(container: PyTree, instance: PyTree, allow_missing_fiel
     if unknown_fields:
         message = f"the following fields in {_get_qualified_name(instance)!r} are present in " \
                    "the class definition but are missing in the hdf5 " \
-                  f"file: {", ".join(unknown_fields)}"
+                  f"file: {', '.join(unknown_fields)}"
         if allow_unknown_fields:
             warnings.warn(message, JaxonFormatWarning)
         else:
