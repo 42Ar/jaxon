@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/42Ar/jaxon/actions/workflows/tests.yml/badge.svg)](https://github.com/42Ar/jaxon/actions/workflows/tests.yml)
 
-Jaxon is a Python library for saving and loading arbitrary nested data structures
+Jaxon is a focused Python library for saving and loading arbitrary nested data structures
 ("pytrees") to the [Hierarchical Data Format (HDF5)](https://wikipedia.org/wiki/Hierarchical_Data_Format).
 
 HDF5 is an open, self-describing format with native support for multidimensional
@@ -14,6 +14,8 @@ is no longer available.
 Jaxon is well suited for machine learning and scientific computing. It is especially
 compatible with packages that use Python dataclasses and
 [JAX](https://github.com/jax-ml/jax), such as [Equinox](https://docs.kidger.site/equinox/).
+Jaxon intentionally has a narrow scope — saving and loading pytrees is all it does.
+The `save` and `load` API is stable.
 
 **Requires Python ≥ 3.12.**
 
