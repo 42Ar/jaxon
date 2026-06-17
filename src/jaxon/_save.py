@@ -220,7 +220,7 @@ def _store_in_attrib(group, data: Any, group_key: str, atom: JaxonAtom,
                            memoryview)):
         group.attrs[group_key] = data
     else:
-        assert False, f"unexpected internal jaxon data type {type(data)!r}"
+        raise TypeError(f"unexpected internal jaxon data type {type(data)!r}")
     attrib_path = group_path + _escape_attrib_path_ele(group_key)
     stored_atoms[id(atom)] = attrib_path
 
@@ -268,7 +268,7 @@ def _store_atom(group, atom: JaxonAtom, group_key: str, storage_hints: dict,
             _store_in_attrib(group, atom.typehint, group_key, atom, stored_atoms, group_path)
             group.create_dataset(group_key, data=atom.data)
     else:
-        assert False, f"unexpected internal jaxon data type {type(atom.data)!r}"
+        raise TypeError(f"unexpected internal jaxon data type {type(atom.data)!r}")
 
 
 def save(path_or_file, pytree: PyTree,
