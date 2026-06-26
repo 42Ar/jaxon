@@ -13,13 +13,24 @@
 
 ```bash
 # Run all tests (no installation required)
-PYTHONPATH=src python -m unittest tests.tests
+PYTHONPATH=src pytest tests/
 
-# Run a single test class
-PYTHONPATH=src python -m unittest tests.tests.RoundtripTests
+# Run tests with verbose output
+PYTHONPATH=src pytest tests/ -v
 
-# Run a single test method
-PYTHONPATH=src python -m unittest tests.tests.RoundtripTests.test_simple_types
+# Run a specific test file
+PYTHONPATH=src pytest tests/tests.py
+
+# Run a specific test
+PYTHONPATH=src pytest tests/tests.py::test_roundtrip_simple_types
+
+# Run tests matching a pattern
+PYTHONPATH=src pytest tests/ -k "roundtrip"
+PYTHONPATH=src pytest tests/ -k "error"
+PYTHONPATH=src pytest tests/ -k "filter"
+
+# Run tests with detailed output
+PYTHONPATH=src pytest tests/ -vv
 
 # Build
 python -m build
