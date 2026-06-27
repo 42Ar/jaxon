@@ -122,7 +122,7 @@ def _to_atom_non_reference_type(pytree: PyTree, downcast_to_base_types: tuple,
             return JaxonAtom(pytree)
         rep = repr(pytree)
         if isinstance(pytree, complex):
-            rep = rep[1:-1]  # remove unnecessary brackets
+            rep = rep[1:-1] if rep[0] == '(' else rep
         return JaxonAtom(f"{py_numeric_type}({rep})")
     if isinstance(pytree, (range, slice)):  # range, slice cannot be subclassed;
                                             # so downcast_to_base_types is irrelevant

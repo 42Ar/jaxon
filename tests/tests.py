@@ -161,6 +161,7 @@ def rand_string(seed, n):
 def test_roundtrip_simple_types():
     pytree = {
         "complex": 1j + 5,
+        "complex_pure_imaginary": 1j,
         "bool": True,
         "bool2": False,
         "None": None,
