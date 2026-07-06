@@ -47,74 +47,27 @@ print(load("data.hdf5"))
 {'mylist': ['foo', 'bar', 42], 'myset': {'b', 'a', (42, b'blob'), 'z'}, 'numpy_array': array([0, 1, 2]), 'jax_array': Array([0, 1, 2], dtype=int32)}
 ```
 
-`save` also accepts a file-like object instead of a path:
-
-```python
-import tempfile
-with tempfile.TemporaryFile() as f:
-    save(f, pytree)
-    result = load(f)
-```
-
 
 ## Supported types
 
-A pytree is any nested combination of the types listed below. Dictionary keys may
-themselves be pytrees (as long as they are hashable). Circular references are
-detected and raise an error.
+Jaxon can save and load all pytrees that are nested structures of the types listed below. Note that custom types can be added, see [Custom types](#custom-types).
+Dictionary keys may themselves be pytrees (as long as they are hashable).
+Circular references are detected and raise an error.
 
-| Type | Stored as |
-| ---- | --------- |
-| `list`, `tuple`, `dict`, `set`, `frozenset` | HDF5 group |
-| `str` | HDF5 UTF-8 fixed-length string |
-| `int`, `float`, `bool`, `complex` | String representation (see [Python numerics](#python-numeric-types)) |
-| `None`, `Ellipsis`, `slice`, `range` | String representation |
-| `bytes`, `bytearray`, `memoryview` | HDF5 attribute (or dataset) |
-| `np.ndarray`, `jax.Array` | HDF5 attribute (or dataset) |
-| `np.bool_` | HDF5 attribute |
-| `np.int8`, `np.int16`, `np.int32`, `np.int64` | HDF5 attribute |
-| `np.uint8`, `np.uint16`, `np.uint32`, `np.uint64` | HDF5 attribute |
-| `np.float16`, `np.float32`, `np.float64` | HDF5 attribute |
-| `np.complex64`, `np.complex128` | HDF5 attribute |
-| `np.longdouble`, `np.clongdouble` | HDF5 attribute (see [Platform-specific types](#platform-specific-numeric-types)) |
-| Any Python dataclass | HDF5 group containing all fields (see [Dataclasses](#dataclasses)) |
+| Type                                        | Stored as                                                            |
+|---------------------------------------------|----------------------------------------------------------------------|
+| `list`, `tuple`, `dict`, `set`, `frozenset` | HDF5 group                                                           |
+| `str`                                       | HDF5 UTF-8 fixed-length string                                       |
+| `int`, `float`, `bool`, `complex`           | String representation (see [Python numerics](#python-numeric-types)) |
+| `None`, `Ellipsis`, `range`                 | String representation                                                |
+| `bytes`, `bytearray`                        | HDF5 dataset                                                         |
+| All numpy generics ¹                        | HDF5 attribute                                                       |
+| `np.ndarray`, `jax.Array` ²                 | HDF5 dataset                                                         |
+| Python dataclasses                          | HDF5 group                                                           |
 
-Only the array contents are stored; metadata such as array titles is not preserved.
+¹ Except for `numpy.object_`
 
-
-### Python numeric types
-
-By default Jaxon preserves the Python types `int`, `float`, `bool`, and `complex`
-exactly using a string representation. To store them as compact binary HDF5
-attributes (which is more efficient for large numbers of scalars) pass
-`exact_python_numeric_types=False` to `save`:
-
-```python
-save("data.hdf5", {"x": 1, "y": 3.14}, exact_python_numeric_types=False)
-result = load("data.hdf5")
-# result["x"] is np.int64(1), result["y"] is np.float64(3.14)
-```
-
-To convert only specific Python types, use `py_to_np_types`:
-
-```python
-save("data.hdf5", data, py_to_np_types=(int, float))  # bool and complex stay as strings
-```
-
-
-### Platform-specific numeric types
-
-`np.longdouble` and `np.clongdouble` are supported on all platforms, but their
-precision depends on the hardware:
-
-- **Linux x86-64**: 80-bit extended precision (stored in 128 bits); accessible
-  also as `np.float128` and `np.complex256`.
-- **Windows / macOS ARM**: 64-bit (same precision as `np.float64`); `np.float128`
-  does not exist on these platforms.
-
-A file containing `np.longdouble` scalars saved on Linux can be loaded on Windows,
-but values will be truncated to 64-bit precision. Jaxon does not warn about this
-because the truncation happens inside h5py.
+² Only the actual data of the array is stored. Metadata such as column titles is not preserved. Arrays can have dataypes of the supported numpy generics.
 
 
 ### Dataclasses
@@ -143,6 +96,7 @@ Machine learning packages such as [Equinox](https://docs.kidger.site/equinox/)
 automatically make all modules Python dataclasses, so Jaxon is fully compatible
 with them.
 
+
 #### Schema evolution
 
 If a dataclass has changed between saving and loading (fields added or removed),
@@ -154,6 +108,25 @@ result = load(
     allow_missing_fields=True,   # fields in file but absent from the class: warn, skip
     allow_unknown_fields=True,   # fields in class but absent from file: use default or JAXON_NOT_LOADED
 )
+```
+
+
+### Python numeric types
+
+By default Jaxon preserves the Python types `int`, `float`, `bool`, and `complex`
+exactly. If `exact_python_numeric_types=False` is passed to `save`, they are converted to numpy generics before saving and stored in binary form.
+This also implies that they are loaded as numpy generic:
+
+```python
+save("data.hdf5", {"x": 1, "y": 3.14}, exact_python_numeric_types=False)
+result = load("data.hdf5")
+# result["x"] is np.int64(1), result["y"] is np.float64(3.14)
+```
+
+To convert only specific Python types, use `py_to_np_types`:
+
+```python
+save("data.hdf5", data, py_to_np_types=(int, float))  # bool and complex stay as strings
 ```
 
 
@@ -203,7 +176,7 @@ the fully-qualified class name so the correct class is instantiated on load.
 
 ### Custom marshaler/unmarshaler functions
 
-For types you cannot modify, pass callables to `save` and `load`:
+For types that cannot be modified, callables can be passed to `save` and `load`:
 
 ```python
 def marshal(obj):
@@ -220,7 +193,7 @@ save("data.hdf5", obj, custom_marshalers=[marshal])
 result = load("data.hdf5", custom_unmarshalers=[unmarshal])
 ```
 
-Multiple marshalers can be provided; the first one returning non-`None` is used.
+If multiple marshalers are provided the first that returns a non-`None` result is used.
 Custom marshalers take priority over `to_jaxon`/`from_jaxon` and the dataclass
 fallback.
 
@@ -264,24 +237,108 @@ string. Dict keys themselves are always loaded regardless of the filter.
 
 ## Storage hints
 
-By default all arrays, byte buffers, and memoryviews are stored as HDF5
-attributes. For very large arrays it can be preferable to use HDF5 datasets
-instead, which support chunking and compression:
 
-```python
-from jaxon import save, JaxonStorageHints
+## Schema
 
-big_array = np.zeros((1000, 1000))
-save(
-    "data.hdf5",
-    {"array": big_array},
-    storage_hints=[(big_array, JaxonStorageHints(store_in_dataset=True))],
-)
-```
+This section describes how Jaxon stores pytrees in an HDF5 file.
 
-The hint is identified by object identity (`is`), so the object passed in
-`storage_hints` must be the same object that appears in the pytree.
 
+### Overall Design Rational
+
+1. Jaxon adheres to the principle of storing data efficiently wherever the user provides the data in an efficiently packed format (e.g. as an numpy array).
+In other cases (e.g. for single int attributes, lists of Dataclasses, etc.) Jaxon prefers portability and simplicity over efficiency.
+2. Every stored data item (e.g. dictionary entry, list entry, dataclass attribute, etc.) is represented by a single attribute.
+
+
+### Python containers
+
+####  dict
+
+
+#### list, tuple, set frozenset
+
+
+### Scalar NumPy Types
+
+Jaxon supports the following numeric NumPy generic types:
+
+| numpy dtype                | ctype               | Native HDF5 Type           |
+|----------------------------|---------------------|----------------------------|
+| numpy.bool_                | bool                | H5T_NATIVE_HBOOL           |
+| numpy.byte                 | char                | H5T_NATIVE_SCHAR           |
+| numpy.ubyte                | unsigned char       | H5T_NATIVE_UCHAR           |
+| numpy.short                | short               | H5T_NATIVE_SHORT           |
+| numpy.ushort               | unsigned short      | H5T_NATIVE_USHORT          |
+| numpy.intc                 | int                 | H5T_NATIVE_INT             |
+| numpy.uintc                | unsigned int        | H5T_NATIVE_UINT            |
+| numpy.uint / numpy.ulong   | ¹                   | ¹                          |
+| numpy.int_ / numpy.long    | long                | H5T_NATIVE_LONG            |
+| numpy.longlong             | long long           | H5T_NATIVE_LLONG           |
+| numpy.ulonglong            | unsigned long long  | H5T_NATIVE_ULLONG          |
+| numpy.half / numpy.float16 | _Float16            | H5T_NATIVE_FLOAT16         |
+| numpy.single               | float               | H5T_NATIVE_FLOAT           |
+| numpy.double               | double              | H5T_NATIVE_DOUBLE          |
+| numpy.longdouble           | long double         | H5T_NATIVE_LDOUBLE         |
+| numpy.csingle              | float complex       | H5T_NATIVE_FLOAT_COMPLEX   |
+| numpy.cdouble              | double complex      | H5T_NATIVE_DOUBLE_COMPLEX  |
+| numpy.clongdouble          | long double complex | H5T_NATIVE_LDOUBLE_COMPLEX |
+
+¹ According to the numpy 2.5 documentation, the datatype is 64bit on 64bit systems and 32 bit on 32 bit systems and therefore has no definitive c equivalent.
+
+Note that the actual width of each type depends on the specifc platform: An array saved as `numpy.long` on one platform might load as an `numpy.intc` on another platform.
+Only the width and signedness of the type is guranteed to be equal on both platforms.
+The types listed above are stored directly in the attribute value without appending a typehint to the respective key.
+All other types either store a typehint appended to the respective attribute key; or they are guranteed to be of string type.
+
+Additionally, the following strings types are supported:
+
+|numpy dtype  | HDF5 Type  | HDF5 Character Set | Jaxon typehint |
+|-------------|------------|--------------------|----------------|
+|numpy.bytes_ | H5T_STRING | H5T_CSET_ASCII     | numpy.bytes_   |
+|numpy.str_   | H5T_STRING | H5T_CSET_UTF8      | numpy.str_     |
+
+
+### Numpy Arrays
+
+
+### Jax Arrays
+
+Jaxon supports n-dimensional numpy arrays of the types above. Jax arrays are first converted to numpy. The type information is preserved by adding the typehint `jax.Array`.
+
+
+### Python types
+
+The following python types are stored by converting them to utf8 strings (H5T_STRING type with H5T_CSET_UTF8). The representation is mostly the same as produced by python's `repr(...)` function.
+
+| python type | Encoding                                                                                  |
+|-------------|-------------------------------------------------------------------------------------------|
+| bool        | `repr(...)` of the bool                                                                   |
+| int         | `repr(...)` of the int                                                                    |
+| float       | `repr(...)` of the float                                                                  |
+| complex     | `repr(...)` of the complex; brackets are always present even for purely imaginary numbers |
+| str         | raw string, quouted with single qoutes                                                    |
+| None        | `None`                                                                                    |
+| Ellipsis    | `Ellipsis`                                                                                |
+| range       | `repr(...)` of the range                                                                  |
+
+The rational behind encoding these python datatypes as strings is that python dictionaries map most naturally to HDF5 Groups, where the keys must be provided as strings.
+Since dictionary keys are often of type `int` or `str`, encoding them as strings results in the most convenient format. For consistency, it was decided to use the same encoding also for cases where the value is not a dicitonary key.
+
+Furthermore, the following python types are supported by converting them to one of the numpy type above and adding a typehint to preserve the original type information.  
+
+|python type   | converted to                | typehint   |
+|--------------|-----------------------------|------------|
+|`bytes`       | numpy.bytes_                | bytes      |
+|`bytearray`   | numpy.ndarray (dtype=uint8) | bytearray  |
+
+
+### Root Node
+
+
+### Datclasses
+
+
+### Chained type conversion
 
 ## Acknowledgements
 

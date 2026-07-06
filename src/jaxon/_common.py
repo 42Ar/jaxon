@@ -16,7 +16,7 @@
 
 """
 Constants, type aliases, exception classes, internal data classes, and small
-utility functions shared by both the save and load modules.
+utility functions.
 """
 
 
@@ -27,42 +27,98 @@ import numpy as np
 import jax
 
 
-# note that the following lists of types do not represent what is supported by jaxon
-# (refer to the README)
-JAXON_NP_NUMERIC_TYPE_NAMES = ("int8", "int16", "int32", "int64", "uint8", "uint16", "uint32",
-    "uint64", "float16", "float32", "float64", "longdouble", "complex64", "complex128",
-    "clongdouble", "bool_")  # canonical numpy scalar type names; all exist on every platform
-JAXON_NP_NUMERIC_TYPES = tuple(getattr(np, typename) for typename in JAXON_NP_NUMERIC_TYPE_NAMES)
-JAXON_PY_NUMERIC_TYPES = (int, float, bool, complex)  # supported python numeric types
-JAXON_CONTAINER_TYPES = (list, tuple, dict, set, frozenset)  # supported python container types
+# supported numpy numeric types
+JAXON_NUMPY_INT_TYPES = {
+    np.int8, np.int16, np.int32, np.int64,
+    np.uint8, np.uint16, np.uint32, np.uint64
+}
+JAXON_NUMPY_FLOAT_TYPES = {np.float16, np.float32, np.float64}
+if hasattr(np, "float128"):
+    JAXON_NUMPY_FLOAT_TYPES.add(np.float128)
+JAXON_NUMPY_COMPLEX_TYPES = {np.complex64, np.complex128}
+if hasattr(np, "complex256"):
+    JAXON_NUMPY_COMPLEX_TYPES.add(np.complex256)
+JaxonNumpyNumeric = np.number | np.bool  # supported numpy numerical types
+JAXON_NUMPY_NUMERIC_TYPES = (JAXON_NUMPY_INT_TYPES | JAXON_NUMPY_FLOAT_TYPES
+                             | JAXON_NUMPY_COMPLEX_TYPES | {np.bool})
+JAXON_NUMPY_NUMERIC_DTYPES = {np.dtype(t) for t in JAXON_NUMPY_NUMERIC_TYPES}
+
+# supported numpy atomic types (`generic` types in numpy terminology)
+JaxonNumpyAtomic = JaxonNumpyNumeric | np.str_ | np.bytes_ | np.void
+JAXON_NUMPY_ATOMIC_TYPES = JAXON_NUMPY_NUMERIC_TYPES | {np.str_, np.bytes_, np.void}
+
+# supported types for numpy arrays (these are not dtype objects)
+JaxonNumpyArrayType = JaxonNumpyNumeric | np.bytes_ | np.void
+JAXON_NUMPY_ARRAY_TYPES = JAXON_NUMPY_NUMERIC_TYPES | {np.bytes_, np.void}
+
+# supported python numeric types
+JaxonPyNumeric = int | float | bool | complex
+JAXON_PY_NUMERIC_TYPES = {int, float, bool, complex}
+
+# supported python atomic types
+JaxonPyAtomic = JaxonPyNumeric | str | bytearray | bytes | type(None) | type(Ellipsis) | range
+JAXON_PY_ATOMIC_TYPES = (JAXON_PY_NUMERIC_TYPES
+                         | {str, bytearray, bytes, type(None), type(Ellipsis), range})
+
+# all supported atomic types
+JaxonAtomic = JaxonNumpyAtomic | JaxonPyAtomic
+JAXON_ATOMIC_TYPES = JAXON_NUMPY_ATOMIC_TYPES | JAXON_PY_ATOMIC_TYPES
+
+# supported python container types
+JaxonPyContainer = list | tuple | dict | set | frozenset
+JAXON_PY_CONTAINER_TYPES = {list, tuple, dict, set, frozenset}
 
 
-# get the type of a jax array (in a version-independent way)
-# it is used to detect jax arrays
-JAXON_JAX_ARRAY_TYPE = type(jax.numpy.array([]))
-
-
-# the following are keywords which are used in the HDF5 file
-JAXON_NONE = "None"  # used to encode python `None`
-JAXON_ELLIPSIS = "Ellipsis"  # used to encode python `...`
-JAXON_DICT_KEY = "key"  # used to indicate that this HDF5 attribute stores
-                        # the key of another attribute in the same group
-                        # (only used if necessary)
-JAXON_DICT_VALUE = "value" # used to indicate that this HDF5 attribute stores
-                           # a dict value (only used iff `JAXON_DICT_KEY` is used)
-JAXON_ROOT_GROUP_KEY = "JAXON_ROOT"  # HDF5 root group name (might be followed by typehint of
-                                     # the root object)
-JAXON_REF = "ref"  # typehint that indicates a path to another object in the
-                   # hdf5 file which maps to a python reference
-
-
-# type definitions
+# type alias
 PyTree = Any
 _PathElement = Any
 Marshaler = Callable[[PyTree], tuple[str, PyTree] | None]
 Unmarshaler = Callable[[str, PyTree], PyTree | None]
 LoadFilter = Callable[[list[_PathElement]], bool]
-_JaxonMissing = object
+_JAXON_JAX_ARRAY_TYPE = type(jax.numpy.array([]))  # get the type of a jax array
+                                                   # (in a version-independent way)
+
+
+# table to convert jaxon to numpy type
+_JAXON_JAX_TO_NUMPY_TYPE = {
+    'uint2':              np.uint8,    # 2-bit unsigned  → uint8
+    'uint4':              np.uint8,    # 4-bit unsigned  → uint8
+    'int2':               np.int8,     # 2-bit signed    → int8
+    'int4':               np.int8,     # 4-bit signed    → int8
+    'float4_e2m1fn':      np.float16,  # 4-bit float     → float16
+    'float8_e3m4':        np.float16,  # 8-bit float     → float16
+    'float8_e4m3':        np.float16,  # 8-bit float     → float16
+    'float8_e4m3fn':      np.float16,  # 8-bit float     → float16
+    'float8_e4m3fnuz':    np.float16,  # 8-bit float     → float16
+    'float8_e4m3b11fnuz': np.float16,  # 8-bit float     → float16
+    'float8_e5m2':        np.float16,  # 8-bit float     → float16
+    'float8_e5m2fnuz':    np.float16,  # 8-bit float     → float16
+    'float8_e8m0fnu':     np.float16,  # 8-bit float     → float16
+    'bfloat16':           np.float32,  # 16-bit bfloat   → float32 (not float16: different exponent range)
+}
+
+
+# keywords which are used in the HDF5 file
+JAXON_NONE = "None"  # used to encode python None
+JAXON_ELLIPSIS = "Ellipsis"  # used to encode python Ellipsis (`...`)
+JAXON_DICT_KEY = "key"  # used to indicate that this HDF5 attribute stores
+                        # the key of another attribute in the same group
+                        # (only used if necessary)
+JAXON_DICT_VALUE = "value"  # used to indicate that this HDF5 attribute stores
+                            # a dict value (only used iff `JAXON_DICT_KEY` is used)
+JAXON_ROOT_GROUP_KEY = "JAXON_ROOT"  # HDF5 root group name (might be followed by typehint of
+                                     # the root object)
+JAXON_JAX_ARRAY = "jax.Array"       # typehint for jax arrays
+JAXON_NUMPY_ARRAY = "numpy.ndarray" # typehint for numpy arrays
+JAXON_NUMPY_STR = "numpy.str_"      # typehint for numpy.str_
+JAXON_NUMPY_BYTES = "numpy.bytes_"  # typehint for numpy.bytes_
+JAXON_NUMPY_VOID = "numpy.void"     # typehint for numpy.void
+
+
+# singleton flag object, used internally
+class _JaxonMissing:
+    __slots__ = ()
+_JAXON_MISSING = _JaxonMissing()
 
 
 class JaxonFormatWarning(UserWarning):
@@ -71,6 +127,10 @@ class JaxonFormatWarning(UserWarning):
 
 class JaxonError(RuntimeError):
     """Base class for all errors raised by Jaxon"""
+
+
+class JaxonFormatError(JaxonError):
+    """Error that indicates an incompatible hdf5 file"""
 
 
 class CircularPyTreeException(JaxonError):
@@ -83,12 +143,28 @@ class _JaxonLoadedFromReferenceWrapper:
     pytree: PyTree
 
 
-class _JaxonNotLoadedType:
-    """Type of the ``JAXON_NOT_LOADED`` sentinel. Not intended to be instantiated directly."""
+class JaxonNotLoaded:
+    """Placeholder object to indicate data that has not been loaded."""
     __slots__ = ()
 
     def __repr__(self):
         return "JAXON_NOT_LOADED"
+
+    def __eq__(self, other):
+        """Supported so that this object is compatible with sets."""
+        return False
+
+    def __hash__(self):
+        """Supported so that this object is compatible with sets."""
+        return hash(type(self))
+
+
+class _DictKeyPathElementType:
+    """Singleton flag object to indicate that loader descended into a dict key."""
+    __slots__ = ()
+
+    def __repr__(self):
+        return "_DICT_KEY_PATH_ELEMENT"
 
     def __eq__(self, other):
         return self is other
@@ -97,56 +173,48 @@ class _JaxonNotLoadedType:
         return hash(type(self))
 
 
-class _DictKeyPathElement:
-    """Flag object path element to indicate that loader descended into a dict key."""
-
-    def __repr__(self):
-        return "_DICT_KEY_PATH_ELEMENT"
-
-
-JAXON_NOT_LOADED = _JaxonNotLoadedType()
-JaxonNotLoaded = _JaxonNotLoadedType  # public alias; use for isinstance checks
-_DICT_KEY_PATH_ELEMENT = _DictKeyPathElement()
-_JAXON_MISSING = _JaxonMissing()
+_DICT_KEY_PATH_ELEMENT = _DictKeyPathElementType()
 
 
 @dataclass
-class JaxonDict:
+class _JaxonDict:
     """Internal representation of a dict."""
-    data: list[tuple['JaxonAtom', 'JaxonAtom']] = dataclasses.field(default_factory=list)
+    data: list[tuple['_JaxonAtom', '_JaxonAtom']] = dataclasses.field(default_factory=list)
 
 
 @dataclass
-class JaxonList:
-    """Internal representation of a list."""
-    data: list['JaxonAtom'] = dataclasses.field(default_factory=list)
+class _JaxonList:
+    """Internal representation of a list, tuple, set or frozenset."""
+    data: list['_JaxonAtom'] = dataclasses.field(default_factory=list)
+
+
+_JaxonInternalType = JaxonNumpyAtomic | np.ndarray | str | _JaxonList | _JaxonDict
+_JAXON_INTERNAL_TYPES = JAXON_NUMPY_ATOMIC_TYPES | {np.ndarray, str, _JaxonList, _JaxonDict}
 
 
 @dataclass
-class JaxonAtom:
+class _JaxonAtom:
     """Internal representation of any data item (including containers). The `data`
     field encodes the actual data which has been converted to a smaller subset
-    of possible types, which are `JAXON_NP_NUMERIC_TYPES`, `memoryview`, `np.ndarray`,
-    `str` and if python to numpy type conversion is activated, also `JAXON_PY_NUMERIC_TYPES`.
-    For certain types it is necessary to have an additional `typehint` to reconstruct the
-    original type of `data`. The field `original_obj_id` keeps track of the `id(...)` of
-    the pytree object that is or was converted to `data`."""
-    data: Any
+    of possible types, which are `_JaxonInternalType`. For some types it is necessary
+    to have an additional `typehint` (and possibly a typearg) to reconstruct the
+    original type of `data`. The field `original_obj_id` keeps track of the `id(...)`
+    of the pytree object that is or was converted to `data`."""
+    data: _JaxonInternalType
     typehint: str | None = None
     original_obj_id: int | None = None
+    typearg: str | None = None
+
+    def __post_init__(self):
+        assert type(self.data) in _JAXON_INTERNAL_TYPES, "tried to construct _JaxonAtom " \
+            "with invalid data type"
 
     def is_simple(self) -> bool:
-        """A simple atom encodes the data and typehint only into in the data field
-        which must be a str that does not contain null chars. This means that
-        simple atoms can be used as group or attribute keys in the HDF5 file."""
+        """A simple atom can be used as a group or attribute key in the HDF5 file
+        and reconstructed from the key data alone. For this, the atom cannot have
+        a typehint and `self.data` must be a `numpy.str_` that does not contain
+        null chars."""
         return self.typehint is None and type(self.data) is str and "\0" not in self.data
-
-
-@dataclass
-class JaxonStorageHints:
-    """If the field `store_in_dataset` is `True` the associated data will be stored in an HDF5
-    dataset. Otherwise, it will be stored in an HDF5 attribute."""
-    store_in_dataset: bool
 
 
 def has_common_prefix(path: Iterable, other_path: Iterable) -> bool:
