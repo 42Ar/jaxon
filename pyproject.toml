@@ -31,6 +31,12 @@ keywords = [
 ]
 dependencies = ["numpy", "jax", "h5py", "dill"]
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+]
+
 [project.urls]
 Homepage = "https://github.com/42Ar/jaxon"
 Repository = "https://github.com/42Ar/jaxon"
