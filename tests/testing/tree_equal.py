@@ -16,16 +16,14 @@ from jaxon._common import _JAXON_JAX_ARRAY_TYPE, JAXON_PY_NUMERIC_TYPES, \
 from jaxon._save import _base_type
 
 
-class DillSerializedTestObject(ABC):
-    @abstractmethod
-    def __eq__(self, other) -> bool:
-        """must implement equality check; type(self) == type(other) is assured."""
-
-
 class PyTreeTestNode(ABC):
     @abstractmethod
     def children(self) -> tuple:
         """Return all children in a tuple."""
+
+
+class DillObject:
+    """Flag to indicate an object that is serialized with dill."""
 
 
 def _is_non_reference_type(pytree, downcast_to_base_types, py_to_np_types) -> bool:
@@ -117,7 +115,14 @@ def _assert_tree_equal(saved, loaded, downcast_to_base_types, py_to_np_types,
         if isinstance(saved, JaxonNumpyNumeric):
             _assert_numbers_equal(saved, loaded)
         else:
-            assert loaded == saved
+            # trailing null bytes do not need to be preserved for np.bytes_ and np.str_
+            # this is standard behavior
+            if type(loaded) is np.bytes_:
+                assert loaded.rstrip(b"\x00") == saved.rstrip(b"\x00")
+            elif type(loaded) is np.str_:
+                assert loaded.rstrip("\x00") == saved.rstrip("\x00")
+            else:
+                assert loaded == saved
         return
     if _is_type(saved, loaded, (str,), downcast_to_base_types):
         assert saved == loaded
@@ -168,16 +173,20 @@ def _assert_tree_equal(saved, loaded, downcast_to_base_types, py_to_np_types,
             return
         assert False, f"unknown container type {type(saved)!r}"
     if isinstance(loaded, PyTreeTestNode):
+        if isinstance(saved, DillObject):
+            # special handling for descending into dill object
+            # references of objects inside the dilled object to jaxon objects are broken
+            # because they cannot be preserved
+            downcast_to_base_types = tuple()
+            py_to_np_types = tuple()
+            checked_objects_saved = set()
+            checked_objects_loaded = set()
         assert type(loaded) is type(saved)
         ch1 = loaded.children()
         ch2 = saved.children()
         assert len(ch1) == len(ch2)
         for c1, c2 in zip(ch1, ch2):
             _assert_tree_equal(c1, c2, downcast_to_base_types, py_to_np_types, checked_objects_saved, checked_objects_loaded)
-        return
-    if isinstance(loaded, DillSerializedTestObject):
-        assert type(loaded) == type(saved)
-        assert loaded == saved
         return
     assert False, f"unknown node or leaf type in saved tree {type(saved)!r}"
 

@@ -24,7 +24,7 @@ from .testing.classes import CustomDataclass, ObjectForDill, CustomTypeReturnDic
 from .testing.data import TEST_JAXON_ATOMIC, TEST_NUMPY_ARRAY_VALUES, TEST_JAX_ARRAY_DTYPES, \
     get_jax_array_values, rand_string
 from .testing.tree_equal import assert_tree_equal, PyTreeTestNode
-from .testing.fuzz import build_fuzz_tree
+from .testing.fuzz import fuzz_tree_generator
 
 
 def do_roundtrip(pytree, exact_python_numeric_types=True, allow_dill=False,
@@ -81,12 +81,12 @@ def test_trivial_roots():
         for examples in TEST_JAXON_ATOMIC.values():
             for e in examples:
                 run_roundtrip_test(e, exact_python_numeric_types)
-    run_roundtrip_test(ObjectForDill(), False, allow_dill=True)
+    run_roundtrip_test(ObjectForDill(3), allow_dill=True)
     # arrays have already been tested as root nodes
 
 
 def test_dill_objects_in_container():
-    pytree = [{"0": ObjectForDill()}, ObjectForDill()]
+    pytree = [{"0": ObjectForDill(False)}, ObjectForDill({"a": 3})]
     for exact_python_numeric_types in (False, True):
         run_roundtrip_test(pytree, exact_python_numeric_types, allow_dill=True)
 
@@ -163,7 +163,7 @@ def test_nonstring_dict_keys():
         (3, 4): np.arange(42),
         CustomTypeReturnField((324, 34)): 24,
         CustomDataclass(234, "a"): "v",
-        ObjectForDill(): "x"
+        ObjectForDill(1): "x"
     }
     run_roundtrip_test(pytree, allow_dill=True)
 
@@ -171,7 +171,7 @@ def test_nonstring_dict_keys():
 def test_nested_type_conversion():
     pytree = {
         CustomTypeReturnField(CustomTypeReturnField(CustomDataclass(1, "4"))):
-        CustomTypeReturnField(CustomTypeReturnField(CustomDataclass(2, "5")))
+        CustomDataclass(CustomTypeReturnField(CustomTypeReturnField(1)))
     }
     run_roundtrip_test(pytree)
 
@@ -191,10 +191,23 @@ def test_custom_dataclass():
     run_roundtrip_test(pytree)
 
 
+def test_reference_to_marshaler_intermediate():
+    a = []
+    b = CustomTypeReturnField(a)
+    c = CustomTypeReturnField(b)
+    pytree = (c, CustomTypeReturnField(b))
+    run_roundtrip_test(pytree)
+
+
+def test_reference_with_escape_symbols():
+    a = []
+    pytree = {"\\": a, "d": a}
+    run_roundtrip_test(pytree)
+
+
 def test_fuzzing():
-    random.seed(0)
-    for _ in range(200):
-        run_roundtrip_test(build_fuzz_tree(0, 20, [], []))
+    for pytree in fuzz_tree_generator(1000):
+        run_roundtrip_test(pytree, allow_dill=True)
 
 
 def test_error_circular_reference_detection():
@@ -357,10 +370,17 @@ def test_reference_recovery_if_partially_loaded():
     b = np.array([8, 5])
     g = (a, a, b)
     pytree = {"a": a, "b": g, "c": b, "d": (g,)}
+    expected_pytree = {
+        'a': a,
+        'b': (a, JaxonNotLoaded(), JaxonNotLoaded()),
+        'c': JaxonNotLoaded(),
+        'd': JaxonNotLoaded()
+    }
     with tempfile.TemporaryFile() as fp:
         save(fp, pytree)
-        loaded = load(fp, load_filter=lambda path: has_common_prefix(path, ("a",)) or has_common_prefix(path, ("b", 0)))
-        assert_tree_equal({'a': a, 'b': (a, JaxonNotLoaded(), JaxonNotLoaded()), 'c': JaxonNotLoaded(), 'd': JaxonNotLoaded()}, loaded)
+        loaded = load(fp, load_filter=lambda path: (has_common_prefix(path, ("a",))
+                                                    or has_common_prefix(path, ("b", 0))))
+        assert_tree_equal(expected_pytree, loaded)
 
 
 def test_numpy_array_with_title():

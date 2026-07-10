@@ -20,7 +20,8 @@ utility functions.
 """
 
 
-from typing import Any, Callable, Iterable
+from types import EllipsisType
+from typing import Any, Callable, Iterable, Union
 from dataclasses import dataclass
 import dataclasses
 import numpy as np
@@ -56,9 +57,9 @@ JaxonPyNumeric = int | float | bool | complex
 JAXON_PY_NUMERIC_TYPES = {int, float, bool, complex}
 
 # supported python atomic types
-JaxonPyAtomic = JaxonPyNumeric | str | bytearray | bytes | type(None) | type(Ellipsis) | range
+JaxonPyAtomic = JaxonPyNumeric | str | bytearray | bytes | None | EllipsisType | range
 JAXON_PY_ATOMIC_TYPES = (JAXON_PY_NUMERIC_TYPES
-                         | {str, bytearray, bytes, type(None), type(Ellipsis), range})
+                         | {str, bytearray, bytes, type(None), EllipsisType, range})
 
 # all supported atomic types
 JaxonAtomic = JaxonNumpyAtomic | JaxonPyAtomic
@@ -67,6 +68,10 @@ JAXON_ATOMIC_TYPES = JAXON_NUMPY_ATOMIC_TYPES | JAXON_PY_ATOMIC_TYPES
 # supported python container types
 JaxonPyContainer = list | tuple | dict | set | frozenset
 JAXON_PY_CONTAINER_TYPES = {list, tuple, dict, set, frozenset}
+
+
+# all supported builtin types (these are all supported types without custom types)
+JaxonBuiltin = JaxonAtomic | JaxonPyContainer | np.ndarray | jax.Array
 
 
 # type alias
@@ -94,13 +99,16 @@ _JAXON_JAX_TO_NUMPY_TYPE = {
     'float8_e5m2':        np.float16,  # 8-bit float     → float16
     'float8_e5m2fnuz':    np.float16,  # 8-bit float     → float16
     'float8_e8m0fnu':     np.float16,  # 8-bit float     → float16
-    'bfloat16':           np.float32,  # 16-bit bfloat   → float32 (not float16: different exponent range)
+    # 16-bit bfloat   → float32 (not float16: different exponent range)
+    'bfloat16':           np.float32,
 }
 
 
 # keywords which are used in the HDF5 file
 JAXON_NONE = "None"  # used to encode python None
 JAXON_ELLIPSIS = "Ellipsis"  # used to encode python Ellipsis (`...`)
+JAXON_TRUE = "True"
+JAXON_FALSE = "False"
 JAXON_DICT_KEY = "key"  # used to indicate that this HDF5 attribute stores
                         # the key of another attribute in the same group
                         # (only used if necessary)
@@ -188,33 +196,38 @@ class _JaxonList:
     data: list['_JaxonAtom'] = dataclasses.field(default_factory=list)
 
 
-_JaxonInternalType = JaxonNumpyAtomic | np.ndarray | str | _JaxonList | _JaxonDict
-_JAXON_INTERNAL_TYPES = JAXON_NUMPY_ATOMIC_TYPES | {np.ndarray, str, _JaxonList, _JaxonDict}
+_JaxonPrimitive = Union[JaxonNumpyAtomic, np.ndarray, str, _JaxonList, _JaxonDict, "_JaxonAtom"]
 
 
 @dataclass
 class _JaxonAtom:
     """Internal representation of any data item (including containers). The `data`
     field encodes the actual data which has been converted to a smaller subset
-    of possible types, which are `_JaxonInternalType`. For some types it is necessary
+    of possible types, which are `_JaxonPrimitive`. For some types it is necessary
     to have an additional `typehint` (and possibly a typearg) to reconstruct the
-    original type of `data`. The field `original_obj_id` keeps track of the `id(...)`
-    of the pytree object that is or was converted to `data`."""
-    data: _JaxonInternalType
-    typehint: str | None = None
-    original_obj_id: int | None = None
-    typearg: str | None = None
+    original type of `data`. The field `original_obj` holds a reference to the object
+    that has been converted to `data`."""
+    data: _JaxonPrimitive
+    typehint: str = ""
+    original_obj: PyTree | None = None
+    can_be_referenced: bool = True
+    data_path: str | None = None
 
     def __post_init__(self):
-        assert type(self.data) in _JAXON_INTERNAL_TYPES, "tried to construct _JaxonAtom " \
+        assert type(self.data) in _JAXON_PRIMITIVE_TYPES, "tried to construct _JaxonAtom " \
             "with invalid data type"
+        assert self.typehint == self.typehint.strip(), "whitespace not allowed"
 
     def is_simple(self) -> bool:
         """A simple atom can be used as a group or attribute key in the HDF5 file
         and reconstructed from the key data alone. For this, the atom cannot have
         a typehint and `self.data` must be a `numpy.str_` that does not contain
         null chars."""
-        return self.typehint is None and type(self.data) is str and "\0" not in self.data
+        return self.typehint == "" and type(self.data) is str and "\0" not in self.data
+
+
+_JAXON_PRIMITIVE_TYPES = JAXON_NUMPY_ATOMIC_TYPES | \
+    {np.ndarray, str, _JaxonList, _JaxonDict, _JaxonAtom}
 
 
 def has_common_prefix(path: Iterable, other_path: Iterable) -> bool:

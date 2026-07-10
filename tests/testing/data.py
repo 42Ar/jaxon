@@ -82,6 +82,9 @@ TEST_NUMPY_ARRAY_VALUES = TEST_NUMPY_NUMERIC | {
 TEST_JAX_ARRAY_DTYPES = tuple(dtype for dtype in jax_array_types
                               if (dtype.__name__ not in ("ndarray", "TypedNdArray")
                                   and is_supported_jax_dtype(dtype)))
+# Sort available dtypes to have a deterministic order (at least on this platform).
+# This important to have deterministic fuzzing.
+TEST_JAX_ARRAY_DTYPES = sorted(TEST_JAX_ARRAY_DTYPES, key=lambda x: x.__name__)
 UNHASHABLE_ATOMIC_TYPES = (bytearray, np.void)
 
 

@@ -11,18 +11,25 @@ Frank Hermann
 
 from typing import override, Any
 from dataclasses import dataclass
-from .tree_equal import PyTreeTestNode, DillSerializedTestObject
+from .tree_equal import PyTreeTestNode, DillObject
 
 
-class ObjectForDill(DillSerializedTestObject):
-    a: float = 0.5
+class ObjectForDill(PyTreeTestNode, DillObject):
+    def __init__(self, a):
+        self.a = a
 
     def __hash__(self) -> int:
         return hash(self.a)
 
-    @override
+    def __repr__(self) -> str:
+        return f"ObjectForDill({self.a!r})"
+
     def __eq__(self, other) -> bool:
-        return self.a == other.a
+        return isinstance(other, ObjectForDill) and self.a == other.a
+
+    @override
+    def children(self) -> tuple:
+        return (self.a,)
 
 
 class CustomTypeReturnDict(PyTreeTestNode):
@@ -35,27 +42,42 @@ class CustomTypeReturnDict(PyTreeTestNode):
     def to_jaxon(self):
         return {"a": self.a}
 
+    def __hash__(self) -> int:
+        return hash(self.a)
+
+    def __repr__(self) -> str:
+        return f"CustomTypeReturnDict({self.a!r})"
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, CustomTypeReturnDict) and self.a == other.a
+
     @override
     def children(self) -> tuple:
         return (self.a,)
 
 
 class CustomTypeReturnField(PyTreeTestNode):
-    def __init__(self, obj):
-        self.obj = obj
+    def __init__(self, a):
+        self.a = a
 
     def from_jaxon(self, jaxon):
-        self.obj = jaxon
+        self.a = jaxon
 
     def to_jaxon(self):
-        return self.obj
+        return self.a
+
+    def __hash__(self) -> int:
+        return hash(self.a)
+
+    def __repr__(self) -> str:
+        return f"CustomTypeReturnField({self.a!r})"
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, CustomTypeReturnField) and self.a == other.a
 
     @override
     def children(self) -> tuple:
-        return (self.obj,)
-
-    def __hash__(self):
-        return hash(self.obj)
+        return (self.a,)
 
 
 @dataclass
