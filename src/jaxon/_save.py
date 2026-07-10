@@ -19,7 +19,7 @@ Pytree-to-atom conversion and HDF5 writing (save side).
 """
 
 
-from typing import Any, Iterable
+from typing import Any, Iterable, assert_never
 from dataclasses import is_dataclass, fields
 import numpy as np
 import h5py
@@ -85,7 +85,7 @@ def _convert_py_numeric_to_numpy(pytree: JaxonPyNumeric) -> \
         return np.double(pytree)
     if isinstance(pytree, complex):
         return np.cdouble(pytree)
-    assert False, "unreachable"
+    assert_never(pytree)  # pragma: no cover
 
 
 def _escape_str_terminator(string: str) -> str:
@@ -125,6 +125,9 @@ def _convert_builtin_to_atom(pytree: PyTree, downcast_to_base_types: tuple[type,
 
     # numpy generics are stored directly; without typehints
     # except for str_, bytes_ and void (these go into datasets later)
+    #  - str_ needs a typehint to avoid ambiguity with stringified python data
+    #  - bytes_ and void have typehint for consistency with str_, and because of
+    #    the special handling for empty str_, bytes_ and void
     numpy_generic_type = _base_type(pytree, JAXON_NUMPY_ATOMIC_TYPES, downcast_to_base_types)
     if numpy_generic_type is not None:
         if numpy_generic_type is np.str_:
@@ -162,7 +165,10 @@ def _convert_builtin_to_atom(pytree: PyTree, downcast_to_base_types: tuple[type,
     # handle python byte buffer objects
     byte_buffer_type = _base_type(pytree, (bytes, bytearray), downcast_to_base_types)
     if byte_buffer_type is not None:
-        return _JaxonAtom(np.void(pytree), byte_buffer_type.__name__)
+        # The intermediate conversion to bytes is needed to avoid creating an array.
+        # For `bytes` and `bytearray`, trailing null bytes need to be preserved,
+        # therefore store as np.void.
+        return _JaxonAtom(np.void(bytes(pytree)), byte_buffer_type.__name__)
 
     # handle containers
     container_type = _base_type(pytree, JAXON_PY_CONTAINER_TYPES, downcast_to_base_types)
@@ -314,13 +320,13 @@ def _store_atom(group, atom: _JaxonAtom, attrib_name: str, group_path: str) -> N
             dtype = None
         group.create_dataset(group_key, data=data, dtype=dtype)
         attrib_data = np.array([])
-    elif type(atom.data) in (np.ndarray,):
+    elif type(atom.data) is np.ndarray:
         group.create_dataset(group_key, data=atom.data)
         attrib_data = np.array([])
     elif type(atom.data) in (JAXON_NUMPY_NUMERIC_TYPES | {str}):
         attrib_data = atom.data
     else:
-        assert False, f"invalid internal type {type(atom.data).__name__!r} encountered"
+        assert False, f"invalid internal type {type(atom.data).__name__!r} encountered"  # pragma: no cover
 
     # start building full attribute key
     attrib_key = attrib_name

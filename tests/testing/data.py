@@ -8,8 +8,6 @@ Author
 Frank Hermann
 """
 
-import random
-import string
 from itertools import product
 import numpy as np
 import jax
@@ -27,10 +25,13 @@ def is_supported_jax_dtype(dtype):
         return False
 
 
+SPECIAL_CHARS = ("'", ":", "#", "/", "\\", " ", "\0", "ä")
+# bytes is usually not stored as a string literal in attribute path, but test special chars anyway
+SPECIAL_BYTES = (b"'", b":", b"#", b"/", b"\\", b" ", b"\0")
+TEST_STRINGS = tuple("".join(chars) for chars in product((*SPECIAL_CHARS, 'A', ''), repeat=2))
+TEST_BYTES = tuple(b"".join(chars) for chars in product((*SPECIAL_BYTES, b'A', b''), repeat=2))
 TEST_FLOATS = (float(0), float(1), 1.1, -1.1, float(np.inf), float(-np.inf), float(np.nan))
-TEST_COMPLEX = tuple(r + 1j*i for i, r in product(TEST_FLOATS, TEST_FLOATS))
-TEST_STRINGS = ("", "'", '"', "''", '""', ":", "\\", "\\\\", "\0", "/", "/A/A/", "\0A\0", "ö")
-TEST_BYTES = (b"", b"'", b'"', b"''", b'""', b":", b"\\", b"\\\\", b"\0", b"/", b"/A/A/", b"\0A\0")
+TEST_COMPLEX = tuple(r + 1j*i for i, r in product(TEST_FLOATS, repeat=2))
 TEST_NUMPY_NUMERIC = {
     np.bool_: (np.bool_(True), np.bool_(False)),
     np.int8: (np.int8(0), np.int8(1)),
@@ -94,9 +95,3 @@ def get_jax_array_values(dtype):
     if jnp.issubdtype(dtype, jnp.inexact):
         return TEST_FLOATS
     return (0, 1)
-
-
-def rand_string(seed, n):
-    random.seed(seed)
-    special = ["'", '"', "\0", "\r", "\n", "ä", "ö", "ü", "ß", ":", "\\"]
-    return "".join(random.choices(list(string.ascii_uppercase) + special, k=n))

@@ -123,10 +123,22 @@ JAXON_NUMPY_BYTES = "numpy.bytes_"  # typehint for numpy.bytes_
 JAXON_NUMPY_VOID = "numpy.void"     # typehint for numpy.void
 
 
-# singleton flag object, used internally
 class _JaxonMissing:
+    """Internal singleton flag object to indicate an unavailable result."""
     __slots__ = ()
 _JAXON_MISSING = _JaxonMissing()
+
+
+class _DictKeyPathElement:
+    """Internal singleton flag object to indicate that loader descended into a dict key."""
+    __slots__ = ()
+_DICT_KEY_PATH_ELEMENT = _DictKeyPathElement()
+
+
+@dataclass(frozen=True)
+class _JaxonLoadedFromReferenceWrapper:
+    """Indicates that the wrapped object has been loaded from a reference."""
+    pytree: PyTree
 
 
 class JaxonFormatWarning(UserWarning):
@@ -145,12 +157,6 @@ class CircularPyTreeException(JaxonError):
     """Raised when a circular reference (reference to a parent object) was detected."""
 
 
-@dataclass(frozen=True)
-class _JaxonLoadedFromReferenceWrapper:
-    """Indicates that the wrapped object has been loaded from a reference."""
-    pytree: PyTree
-
-
 class JaxonNotLoaded:
     """Placeholder object to indicate data that has not been loaded."""
     __slots__ = ()
@@ -165,23 +171,6 @@ class JaxonNotLoaded:
     def __hash__(self):
         """Supported so that this object is compatible with sets."""
         return hash(type(self))
-
-
-class _DictKeyPathElementType:
-    """Singleton flag object to indicate that loader descended into a dict key."""
-    __slots__ = ()
-
-    def __repr__(self):
-        return "_DICT_KEY_PATH_ELEMENT"
-
-    def __eq__(self, other):
-        return self is other
-
-    def __hash__(self):
-        return hash(type(self))
-
-
-_DICT_KEY_PATH_ELEMENT = _DictKeyPathElementType()
 
 
 @dataclass

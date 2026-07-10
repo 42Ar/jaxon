@@ -17,14 +17,15 @@ import random
 import pytest
 import jax.numpy as jnp
 import numpy as np
+from numpy.random import default_rng, SeedSequence
 from jaxon import load, save, CircularPyTreeException, JaxonNotLoaded, PyTree, \
     JaxonFormatWarning, has_common_prefix, JAXON_PY_NUMERIC_TYPES, JAXON_PY_CONTAINER_TYPES
 from .testing.classes import CustomDataclass, ObjectForDill, CustomTypeReturnDict, \
     CustomTypeReturnField
 from .testing.data import TEST_JAXON_ATOMIC, TEST_NUMPY_ARRAY_VALUES, TEST_JAX_ARRAY_DTYPES, \
-    get_jax_array_values, rand_string
+    get_jax_array_values
 from .testing.tree_equal import assert_tree_equal, PyTreeTestNode
-from .testing.fuzz import fuzz_tree_generator
+from .testing.fuzz import fuzz_tree_generator, rand_str
 
 
 def do_roundtrip(pytree, exact_python_numeric_types=True, allow_dill=False,
@@ -145,11 +146,12 @@ def test_custom_types():
 
 
 def test_single_big_attr_value():
-    run_roundtrip_test(rand_string(42, 1000000))
+    run_roundtrip_test(rand_str(default_rng(), 1000000))
 
 
 def test_multi_big_attr_value():
-    pytree = [rand_string(i, 100000) for i in range(10)]
+    ss = SeedSequence(0)
+    pytree = [rand_str(default_rng(seed), 100000) for seed in ss.spawn(10)]
     run_roundtrip_test(pytree)
 
 
@@ -177,12 +179,12 @@ def test_nested_type_conversion():
 
 
 def test_single_big_key_value():
-    pytree = {rand_string(42, 1000000): 42}
+    pytree = {rand_str(default_rng(0), 1000000): 42}
     run_roundtrip_test(pytree)
 
 
 def test_multi_big_key_value():
-    pytree = {rand_string(i, 100000): i for i in range(10)}
+    pytree = {rand_str(default_rng(0), 100000): i for i in range(10)}
     run_roundtrip_test(pytree)
 
 
@@ -264,7 +266,10 @@ def test_custom_marshaler():
                 return "mycustomtypeid", {"a": pytree.a, "b": pytree.b}
             return None
 
-        pytree = {"g": MyCustomClass(MyCustomClass(None, 3), 0), "f": 123}
+        pytree = {
+            "MyCustomClass": MyCustomClass(MyCustomClass(None, 3), 0),
+            "OtherCustomClass": CustomTypeReturnDict(1)
+        }
         save(fp, pytree, custom_marshalers=(my_marshaler,))
 
         def my_unmarshaler(qualname: str, pytree: PyTree) -> PyTree | None:

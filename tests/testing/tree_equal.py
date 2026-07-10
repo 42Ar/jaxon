@@ -8,6 +8,7 @@ Author
 Frank Hermann
 """
 
+from typing import assert_never
 from abc import ABC, abstractmethod
 import numpy as np
 import jax.numpy as jnp
@@ -171,7 +172,7 @@ def _assert_tree_equal(saved, loaded, downcast_to_base_types, py_to_np_types,
                     assert False, f"frozenset/set element {x!r} exists in saved but not found in loaded"
                 del unmatched[i]
             return
-        assert False, f"unknown container type {type(saved)!r}"
+        assert_never(loaded)  # pragma: no cover
     if isinstance(loaded, PyTreeTestNode):
         if isinstance(saved, DillObject):
             # special handling for descending into dill object
