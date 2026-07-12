@@ -15,11 +15,11 @@
 
 
 """
-HDF5 reading and atom-to-pytree reconstruction (load side).
+This module handles HDF5 reading and pytree reconstruction.
 """
 
 
-from typing import Iterable
+from typing import Iterable, Union
 import importlib
 import warnings
 import dataclasses
@@ -29,19 +29,155 @@ import h5py
 import dill
 from ._common import (
     JAXON_JAX_ARRAY, JAXON_NUMPY_ARRAY, JAXON_NUMPY_STR, JAXON_NUMPY_BYTES,
-    JAXON_NUMPY_VOID, JaxonNotLoaded, JAXON_NUMPY_NUMERIC_TYPES, PyTree,
-    Unmarshaler, LoadFilter, _PathElement,
-    JAXON_NONE, JAXON_ELLIPSIS, JaxonFormatError,
-    JAXON_DICT_KEY, JAXON_DICT_VALUE, JAXON_ROOT_GROUP_KEY,
-    JaxonFormatWarning, JaxonError, CircularPyTreeException,
-    _DICT_KEY_PATH_ELEMENT, _JAXON_MISSING,
-    _JaxonLoadedFromReferenceWrapper, JaxonBuiltin,
-    _get_qualified_name, _key_to_debugstring, JAXON_TRUE, JAXON_FALSE
+    JAXON_NUMPY_VOID, JaxonNotLoaded, JAXON_NUMPY_NUMERIC_TYPES, JaxonNumpyNumeric,
+    PyTree, Unmarshaler, LoadFilter, PathElement, JAXON_NONE, JAXON_ELLIPSIS,
+    JaxonFormatError, JAXON_DICT_KEY, JAXON_DICT_VALUE, JAXON_ROOT_GROUP_KEY,
+    JaxonFormatWarning, JaxonError, CircularPyTreeError, DICT_KEY_PATH_ELEMENT,
+    JAXON_MISSING, JaxonBuiltin, get_qualified_name, JAXON_TRUE, JAXON_FALSE,
+    JaxonMissing
 )
 
 
-def _get_class(qualified_name: str):
-    """Get the class identified by `qualified_name` that was returned by `_get_qualified_name`."""
+class AttribInfo:
+    """
+    Represents an HDF5 attribute. Caches loaded pytrees and holds meta information.
+    
+    Attributes
+    ----------
+    group: HDF5Group
+        Group in which this attribute is contained.
+    attrib_key: str
+        Full attribute key (including possible whitespace).
+        Must be a valid attribute key in the HDF5 group.
+        For example ` mydict : dict#MyCustomClass `.
+    attrib_name: str
+        Stripped attribute name, without any type information.
+        For example `mydict`.
+    type_info: str
+        Full type information. For example `dict#MyCustomClass`.
+    loaded_pytree: PyTree | None
+        If `JAXON_MISSING`, the attribute has not been loaded yet.
+        Otherwise, contains references to the loaded pytree.
+    is_loading: bool
+        If `True` this attribute is currently being loaded.
+    """
+    group: "GroupInfo"
+    attrib_key: str
+    attrib_name: str
+    type_info: str
+    loaded_pytree: PyTree | JaxonMissing
+    is_loading: bool
+
+    def __init__(self, group: "GroupInfo", attrib_key: str, attrib_name: str, type_info: str):
+        self.group = group
+        self.attrib_key = attrib_key
+        self.attrib_name = attrib_name
+        self.type_info = type_info
+        self.loaded_pytree = JAXON_MISSING
+        self.is_loading = False
+
+    def get_value(self):
+        """Get the raw attribute value from HDF5. Not cached."""
+        return self.group.group.attrs[self.attrib_key]
+
+    def get_fixed_length_string(self, attrib_value) -> str:
+        """Make sure that attrib_value is a fixed length utf-8 string and decode it."""
+        info = h5py.check_string_dtype(self.group.group.attrs.get_id(self.attrib_key).dtype)
+        if info is None or info.length is None or info.encoding != "utf-8":
+            raise JaxonFormatError(f"expected fixed length string for attribute {self.path()!r}")
+        return attrib_value.decode("utf-8").strip()
+
+    def path(self) -> str:
+        return self.group.path + self.attrib_key
+
+
+class GroupInfo:
+    """
+    Represents an HDF5 group.
+    
+    Attributes
+    ----------
+    group: h5py.Group
+        Reference to the h5py group.
+    path: str
+        Path in the HDF5 file.
+    objects: dict[str, h5py.Group | h5py.Dataset | GroupInfo]
+        Maps a stripped dataset or group name to either a `h5py.Dataset`,
+        `h5py.Group` or `GroupInfo`. Populated by the constructor. If a group
+        is requested, it is implicitly converted to an `GroupInfo`.
+    attributes: dict[str, AttribInfo]
+        Maps all stripped attribute names to their respective `AttribInfo`
+        object. Populated by the constructor.
+    root: GroupInfo
+        Reference to the root group.
+    """
+    group: h5py.Group
+    path: str
+    parent: Union["h5py.Group", None]
+    objects: dict[str, Union[h5py.Group, h5py.Dataset, "GroupInfo"]]
+    attributes: dict[str, AttribInfo]
+    root: "GroupInfo"
+
+    def __init__(self, group: h5py.Group, path: str,
+            root: Union["GroupInfo", None] = None):
+        """Populates the internal objects and group attributes. If root is `None`
+        it is assumed that this is the root group."""
+        self.group = group
+        self.path = path
+        self.objects = {key.strip(): val for key, val in group.items()}
+        self.attributes = {}
+        if root is None:
+            self.root = self
+            for attrib_key in group.attrs:
+                # a type hint might have been added to the JAXON_ROOT_GROUP_KEY
+                if attrib_key.lstrip().startswith(JAXON_ROOT_GROUP_KEY):
+                    self._add_attrib(attrib_key)
+                    break
+            else:
+                raise JaxonFormatError("jaxon root attribute not found (key "
+                                       f"must start with {JAXON_ROOT_GROUP_KEY!r})")
+        else:
+            self.root = root
+            for attrib_key in group.attrs:
+                self._add_attrib(attrib_key)
+
+    def _add_attrib(self, attrib_key: str) -> None:
+        attrib_name, type_info = split_attrib_name_and_type_info(attrib_key)
+        self.attributes[attrib_name] = AttribInfo(self, attrib_key, attrib_name, type_info)
+
+    def load_dataset(self, dataset_name: str):
+        """Retrieve a dataset. The `dataset_name` must be a stripped string. Not cached."""
+        dataset = self.objects[dataset_name]
+        if not isinstance(dataset, h5py.Dataset):
+            raise JaxonFormatError(f"expected a dataset for {dataset_name!r} in "
+                                   f"group {self.path!r}")
+        return dataset[()]
+
+    def get_group(self, group_key: str) -> "GroupInfo":
+        """Get the group identified by `group_key`, which
+        is assumed to be a stripped string. Cached."""
+        group = self.objects.get(group_key)
+        if group is None:
+            raise JaxonFormatError(f"group {group_key!r} not found in group {self.path!r}")
+        if isinstance(group, GroupInfo):
+            return group
+        if isinstance(group, h5py.Group):
+            group = GroupInfo(group, self.path + group_key + "/", self.root)
+            self.objects[group_key] = group
+            return group
+        raise JaxonFormatError(f"object {group_key!r} in group {self.path!r} has unexpected "
+                               "type, expected dataset")
+
+    def get_attrib(self, attrib_key: str) -> AttribInfo:
+        """"Retrieve an `AttribInfo` object. The `attrib_key` must be a stripped string."""
+        attrib = self.attributes.get(attrib_key)
+        if attrib is None:
+            raise JaxonFormatError(f"attribute {attrib_key!r} not found in group {self.path!r}")
+        return attrib
+
+
+def get_class(qualified_name: str):
+    """Get the class identified by `qualified_name` that was returned by `get_qualified_name`."""
     parts = qualified_name.split(".")
     module_path = ".".join(parts[:-1])
     class_name = parts[-1]
@@ -49,8 +185,7 @@ def _get_class(qualified_name: str):
     return getattr(module, class_name)
 
 
-def _split_type_hint_and_type_arg(type_info: str) -> tuple[str, str | None]:
-    type_info = type_info.strip()  # normally this should already be stripped
+def split_type_hint_and_type_arg(type_info: str) -> tuple[str, str | None]:
     if not type_info:
         return "", None
     if type_info[-1] == "]":
@@ -67,11 +202,12 @@ def _split_type_hint_and_type_arg(type_info: str) -> tuple[str, str | None]:
     return type_info, None
 
 
-def _supply_dataclass_unmarshaler(allow_missing_fields: bool,
+def supply_dataclass_unmarshaler(allow_missing_fields: bool,
         allow_unknown_fields: bool) -> Unmarshaler:
+    """Create an unmarshaler for dataclasses."""
     def dataclass_unmarshaler(type_info: str, dict_: PyTree) -> PyTree | None:
         try:
-            th, qualified_name = _split_type_hint_and_type_arg(type_info)
+            th, qualified_name = split_type_hint_and_type_arg(type_info)
         except JaxonFormatError:
             return None
         if th != "dclass":
@@ -80,32 +216,32 @@ def _supply_dataclass_unmarshaler(allow_missing_fields: bool,
             raise JaxonFormatError("expected type argument for dataclass")
         if type(dict_) is not dict:
             raise JaxonFormatError("expected dict for marshaled dataclass")
-        cls_ = _get_class(qualified_name)
+        cls_ = get_class(qualified_name)
         if not dataclasses.is_dataclass(cls_):
-            raise JaxonFormatError(f"expected that {qualified_name} is a dataclass")
-        instance = cls_.__new__(cls_)
+            raise JaxonFormatError(f"expected that {qualified_name!r} is a dataclass")
+        instance = cls_.__new__(cls_)  # type: ignore
         fields = dataclasses.fields(instance)
         field_names = {f.name for f in fields}
         available_field_names = dict_.keys()
         missing_fields = available_field_names - field_names
         if missing_fields:
-            message = f"The following fields in {_get_qualified_name(instance)!r} are present in " \
-                    "the hdf5 file but are missing in the class " \
-                    f"definition: {', '.join(missing_fields)}"
+            message = f"The following fields in {get_qualified_name(instance)!r} are present in " \
+                      "the HDF5 file but are missing in the class " \
+                      f"definition: {', '.join(map(repr, missing_fields))}"
             if allow_missing_fields:
                 warnings.warn(message, JaxonFormatWarning)
             else:
-                raise ValueError(message + ". To omit this error run "
-                    "with allow_missing_fields=True.")
+                raise JaxonFormatError(message + ". To omit this error run "
+                                       "with allow_missing_fields=True.")
         unknown_fields = field_names - available_field_names
         if unknown_fields:
-            message = f"the following fields in {_get_qualified_name(instance)!r} are present in " \
-                    "the class definition but are missing in the hdf5 " \
-                    f"file: {', '.join(unknown_fields)}"
+            message = f"the following fields in {get_qualified_name(instance)!r} are present in " \
+                      "the class definition but are missing in the HDF5 " \
+                      f"file: {', '.join(map(repr, unknown_fields))}"
             if allow_unknown_fields:
                 warnings.warn(message, JaxonFormatWarning)
             else:
-                raise ValueError(message + ". To omit this error run with "
+                raise JaxonFormatError(message + ". To omit this error run with "
                     "allow_unknown_fields=True. Missing fields will be initialized using the "
                     "default_factory or default value. If both are missing JaxonNotLoaded() "
                     "will be used as a placeholder. The __post_init__() logic is never triggered.")
@@ -125,16 +261,17 @@ def _supply_dataclass_unmarshaler(allow_missing_fields: bool,
     return dataclass_unmarshaler
 
 
-def _jaxon_interface_unmarshaler(type_info: str, marshaled: PyTree) -> PyTree | None:
+def jaxon_interface_unmarshaler(type_info: str, marshaled: PyTree) -> PyTree | None:
+    """Unmarshaler for objects that implement the `from_jaxon` method."""
     try:
-        th, qualified_name = _split_type_hint_and_type_arg(type_info)
+        th, qualified_name = split_type_hint_and_type_arg(type_info)
     except JaxonFormatError:
         return None
     if th != "jaxon":
         return None
     if qualified_name is None:
-        raise JaxonFormatError("expected type argument for dataclass")
-    cls_ = _get_class(qualified_name)
+        raise JaxonFormatError("expected type argument")
+    cls_ = get_class(qualified_name)
     if not hasattr(cls_, 'from_jaxon'):
         raise JaxonFormatError(f"expected that the class {qualified_name!r} marshaled via the "
                                "to_jaxon method has the from_jaxon method")
@@ -143,27 +280,28 @@ def _jaxon_interface_unmarshaler(type_info: str, marshaled: PyTree) -> PyTree | 
     return instance
 
 
-def _supply_dill_unmarshaler(allow_dill: bool, dill_kwargs: dict) -> Unmarshaler:
+def supply_dill_unmarshaler(allow_dill: bool, dill_kwargs: dict) -> Unmarshaler:
+    """Unmarshaler for objects that were marshaled with dill."""
     def dill_unmarshaler(type_info: str, marshaled: PyTree) -> PyTree | None:
         try:
-            th, ta = _split_type_hint_and_type_arg(type_info)
+            th, ta = split_type_hint_and_type_arg(type_info)
         except JaxonFormatError:
             return None
         if th != "dill":
             return None
         if ta is not None:
-            raise JaxonFormatError("did a type argument for dill")
+            raise JaxonFormatError("expected a type argument")
         if not allow_dill:
-            raise ValueError("cannot load dill serialized object as allow_dill=False")
+            raise JaxonFormatError("cannot load dill serialized object as allow_dill=False")
         return dill.loads(marshaled, **dill_kwargs)
     return dill_unmarshaler
 
 
-def _unescape_str_terminator(string: str) -> str:
+def unescape_str_terminator(string: str) -> str:
     return string.replace("\\'", "'").replace("\\\\", "\\")
 
 
-def _simple_atom_from_data_str(data: str) -> PyTree:
+def simple_atom_from_data_str(data: str, attrib: AttribInfo) -> PyTree:
     """Parse `data` and return the represented python object
     if `data` is Jaxon's string representation of `None`, `Ellipsis`,
     `bool`, `str`, `int`, `float`, `complex` or `range`.
@@ -180,8 +318,9 @@ def _simple_atom_from_data_str(data: str) -> PyTree:
         return False
     if data[0] == "'":
         if len(data) < 2 and data[-1] != "'":
-            raise JaxonFormatError(f"string {data!r} not terminated")
-        return _unescape_str_terminator(data[1:-1])
+            raise JaxonFormatError(f"string {data!r} not terminated in "
+                                   f"attribute {attrib.path()!r}")
+        return unescape_str_terminator(data[1:-1])
     try:
         return int(data)
     except ValueError:
@@ -196,18 +335,21 @@ def _simple_atom_from_data_str(data: str) -> PyTree:
         pass
     if data.startswith("range"):
         if not data.startswith("range(") or data[-1] != ")":
-            raise ValueError(f"cannot parse range representation: {data!r}")
+            raise JaxonFormatError(f"cannot parse range representation: {data!r} "
+                                   f"for attribute {attrib.path()!r}")
         parts = data[len("range("):-1].split(",")
         if len(parts) not in (2, 3):
-            raise ValueError(f"cannot parse range representation: {data!r}")
+            raise JaxonFormatError(f"cannot parse range representation: {data!r} "
+                                   f"for attribute {attrib.path()!r}")
         try:
             return range(*[int(f) for f in parts])
         except ValueError as e:
-            raise ValueError(f"cannot parse range representation: {data!r}") from e
-    return _JAXON_MISSING
+            raise JaxonFormatError(f"cannot parse range representation: {data!r} "
+                                   f"for attribute {attrib.path()!r}") from e
+    return JAXON_MISSING
 
 
-def _split_attrib_name_and_type_info(attrib_key: str) -> tuple[str, str]:
+def split_attrib_name_and_type_info(attrib_key: str) -> tuple[str, str]:
     """Separates the attribute name from a possibly added typehint.
     The returned strings are stripped."""
     for i in reversed(range(len(attrib_key))):
@@ -223,13 +365,14 @@ def _split_attrib_name_and_type_info(attrib_key: str) -> tuple[str, str]:
     return attrib_key.strip(), ""
 
 
-def _parse_key_or_val(group_key: str, prefix: str) -> int:
-    if group_key[len(prefix)] != "(":
-        raise JaxonError(f"malformed group key {group_key!r}")
-    return int(group_key[len(prefix) + 1:group_key.find(")")])
+def parse_key_or_val(group_key: str, prefix: str, group: GroupInfo) -> int:
+    closing = group_key.find(")")
+    if closing == -1 or len(group_key) <= len(prefix) or group_key[len(prefix)] != "(":
+        raise JaxonError(f"malformed group key {group_key!r} in group {group!r}")
+    return int(group_key[len(prefix) + 1:closing])
 
 
-def _tokenize_attrib_path(path: str) -> tuple[str]:
+def tokenize_attrib_path(path: str) -> tuple[str]:
     """
     Return a tuple of the stripped path elements of the reference path.
     
@@ -272,148 +415,126 @@ def _tokenize_attrib_path(path: str) -> tuple[str]:
     return tuple(res)
 
 
-def _get_fixed_length_string(group, attrib_key, attrib_value, debug_path: str) -> str:
-    info = h5py.check_string_dtype(group.attrs.get_id(attrib_key).dtype)
-    if info is None or info.length is None or info.encoding != "utf-8":
-        raise JaxonError(f"expected fixed length string for HDF5 attribute at {debug_path!r}")
-    return attrib_value.decode("utf-8").strip()
-
-
-def _load_dataset(group, dataset_name: str):
-    return group[dataset_name][()]
-
-
-def _assert_no_type_arg(ta: str | None, th: str, debug_path: str) -> None:
+def assert_no_type_arg(ta: str | None, attrib: AttribInfo) -> None:
     if ta is not None:
-        raise JaxonFormatError(f"did not expect a type argument for type {th!r} at {debug_path!r}")
+        raise JaxonFormatError(f"did not expect a type argument for attrib {attrib.path()!r}")
 
 
-def _assert_type_arg(ta: str | None, th: str, debug_path: str) -> None:
+def assert_type_arg(ta: str | None, attrib: AttribInfo) -> None:
     if ta is None:
-        raise JaxonFormatError(f"expected a type argument for type {th!r} at {debug_path!r}")
+        raise JaxonFormatError(f"expected a type argument for attribute {attrib.path()!r}")
 
 
-def _load_builtin_type(group, attrib_key: str, attrib_name: str, type_info: str, debug_path: str,
-                       unmarshalers: tuple[Unmarshaler, ...], load_filter: LoadFilter,
-                       parents: list[_PathElement], group_path: str,
-                       loaded_objects: dict[str, PyTree],
-                       currently_loading_object: set[str]) \
-                           -> JaxonBuiltin | _JaxonLoadedFromReferenceWrapper:
-    th, ta = _split_type_hint_and_type_arg(type_info)
+def load_builtin_type(attrib: AttribInfo, type_info: str, parents: list[PathElement],
+        unmarshalers: tuple[Unmarshaler, ...], load_filter: LoadFilter) -> JaxonBuiltin:
+    """Recursively load the pytree represented by `attrib` iff the pytree is a jaxon builtin type.
+    Otherwise, raise an error."""
+    th, ta = split_type_hint_and_type_arg(type_info)
     if not th:
-        attrib_value = group.attrs[attrib_key]
+        attrib_value = attrib.get_value()
         if type(attrib_value) in JAXON_NUMPY_NUMERIC_TYPES:
+            assert isinstance(attrib_value, JaxonNumpyNumeric)
             return attrib_value
-        attrib_value_str = _get_fixed_length_string(group, attrib_key, attrib_value, debug_path)
-        pytree = _simple_atom_from_data_str(attrib_value_str)
-        if pytree is not _JAXON_MISSING:
+        attrib_value_str = attrib.get_fixed_length_string(attrib_value)
+        pytree = simple_atom_from_data_str(attrib_value_str, attrib)
+        if pytree is not JAXON_MISSING:
             return pytree
         # if it's not a simple atom, it must be a reference
         if attrib_value_str[0] == "/":
-            attrib_path_eles = _tokenize_attrib_path(attrib_value_str)
-            target_group = group.file
-            group_path = "/"
+            attrib_path_eles = tokenize_attrib_path(attrib_value_str)
+            target_group = attrib.group.root
             for group_key in attrib_path_eles[:-1]:
-                target_group = target_group[group_key]
-                group_path += group_key + "/"
-            res = _load(target_group, attrib_path_eles[-1], debug_path, unmarshalers, load_filter,
-                parents, group_path, loaded_objects, currently_loading_object)
-            return _JaxonLoadedFromReferenceWrapper(res)
-        raise JaxonFormatError("can not interpret the stringified "
-            f"data in HDF5 attribute {debug_path!r}")
+                target_group = target_group.get_group(group_key)
+            target_attrib = target_group.get_attrib(attrib_path_eles[-1])
+            return do_load(target_attrib, parents, unmarshalers, load_filter)
+        raise JaxonFormatError(f"can not interpret string data {attrib_value_str!r} "
+                               f"of attribute {attrib.path()!r}")
     if th == JAXON_JAX_ARRAY:
-        _assert_type_arg(ta, th, debug_path)
-        return jax.numpy.asarray(_load_dataset(group, attrib_name), dtype=ta)
+        assert_type_arg(ta, attrib)
+        return jax.numpy.asarray(attrib.group.load_dataset(attrib.attrib_name), dtype=ta)
     if th == "bytes":
-        _assert_no_type_arg(ta, th, debug_path)
-        res = _load_dataset(group, attrib_name)
+        assert_no_type_arg(ta, attrib)
+        res = attrib.group.load_dataset(attrib.attrib_name)
         if isinstance(res, h5py.Empty):
             return b''
         return bytes(res)
     if th == "bytearray":
-        _assert_no_type_arg(ta, th, debug_path)
-        res = _load_dataset(group, attrib_name)
+        assert_no_type_arg(ta, attrib)
+        res = attrib.group.load_dataset(attrib.attrib_name)
         if isinstance(res, h5py.Empty):
             return bytearray()
         return bytearray(res)
     if th == JAXON_NUMPY_ARRAY:
-        _assert_no_type_arg(ta, th, debug_path)
+        assert_no_type_arg(ta, attrib)
         # np.asarray needed to correctly restore 0d arrays
-        return np.asarray(_load_dataset(group, attrib_name))
+        return np.asarray(attrib.group.load_dataset(attrib.attrib_name))
     if th == JAXON_NUMPY_STR:
-        _assert_no_type_arg(ta, th, debug_path)
-        res = _load_dataset(group, attrib_name)
+        assert_no_type_arg(ta, attrib)
+        res = attrib.group.load_dataset(attrib.attrib_name)
         if isinstance(res, h5py.Empty):
             return np.str_()
         if type(res) is not np.bytes_:
             res = np.bytes_(res)
         return np.str_(res.decode("utf-8"))
     if th == JAXON_NUMPY_BYTES:
-        _assert_no_type_arg(ta, th, debug_path)
-        res = _load_dataset(group, attrib_name)
+        assert_no_type_arg(ta, attrib)
+        res = attrib.group.load_dataset(attrib.attrib_name)
         if isinstance(res, h5py.Empty):
             return np.bytes_()
         if type(res) is not np.bytes_:
             res = np.bytes_(res)
         return res
     if th == JAXON_NUMPY_VOID:
-        _assert_no_type_arg(ta, th, debug_path)
-        res = _load_dataset(group, attrib_name)
+        assert_no_type_arg(ta, attrib)
+        res = attrib.group.load_dataset(attrib.attrib_name)
         if isinstance(res, h5py.Empty):
             return np.void(b'')
         return res
 
     # handle container types
-    group_key = attrib_name  # same assumption as in saver
-    sub_group_path = group_path + group_key + "/"
-    debug_path = f"{debug_path}[{th}]"
     if th == "dict":
-        _assert_no_type_arg(ta, th, debug_path)
-        sub_group = group[group_key]
+        assert_no_type_arg(ta, attrib)
+        sub_group = attrib.group.get_group(attrib.attrib_name)
         pytree = {}
-        dict_key_index, dict_key = None, None
-        for i, sub_group_key in enumerate(sub_group.attrs):
-            sub_group_key = sub_group_key.strip()
-            if sub_group_key.startswith(JAXON_DICT_KEY):
-                if dict_key_index is not None:
-                    raise JaxonError(f"expected {JAXON_DICT_KEY}({i}) to be "
-                        f"followed immediately by {JAXON_DICT_VALUE}({i}) "
-                        f"while parsing {debug_path!r}")
-                dict_key_index = _parse_key_or_val(sub_group_key, JAXON_DICT_KEY)
-                if len(pytree) != dict_key_index:
-                    raise JaxonError(f"group key index error on {debug_path!r}")
-                dbgstr = f"{debug_path}.key({i})"
-                dict_key = _load(sub_group, sub_group_key, dbgstr, unmarshalers,
-                    load_filter, parents + [_DICT_KEY_PATH_ELEMENT], sub_group_path,
-                    loaded_objects, currently_loading_object)
+        index_in_key, dict_key = None, None
+        for i, sub_attrib in enumerate(sub_group.attributes.values()):
+            if sub_attrib.attrib_name.startswith(JAXON_DICT_KEY):
+                if index_in_key is not None:
+                    raise JaxonFormatError(f"expected '{JAXON_DICT_KEY}({i})' to be "
+                        f"followed immediately by '{JAXON_DICT_VALUE}({i})' while loading "
+                        f"{attrib.path()!r}")
+                index_in_key = parse_key_or_val(sub_attrib.attrib_name, JAXON_DICT_KEY, sub_group)
+                if len(pytree) != index_in_key:
+                    raise JaxonFormatError(f"unexpected index {i} of key attribute while "
+                                           f"loading {attrib.path()!r}")
+                dict_key = do_load(sub_attrib, parents + [DICT_KEY_PATH_ELEMENT],
+                                 unmarshalers, load_filter)
                 continue
-            if sub_group_key.startswith(JAXON_DICT_VALUE):
-                index_in_value_key = _parse_key_or_val(sub_group_key, JAXON_DICT_VALUE)
-                if dict_key_index is None or index_in_value_key != dict_key_index:
-                    raise JaxonError(f"encountered {JAXON_DICT_VALUE}({index_in_value_key}) "
-                        f"without a preceding matching {JAXON_DICT_KEY} while "
-                        f"parsing {debug_path!r}")
-                dict_key_index = None
+            if sub_attrib.attrib_name.startswith(JAXON_DICT_VALUE):
+                index_in_value = parse_key_or_val(sub_attrib.attrib_name, JAXON_DICT_VALUE, sub_group)
+                if index_in_key is None or index_in_value != index_in_key:
+                    raise JaxonFormatError(f"encountered {JAXON_DICT_VALUE}({index_in_key}) "
+                        f"without a preceding matching {JAXON_DICT_KEY}({index_in_key}) "
+                        f"while loading {attrib.path()!r}")
+                index_in_key = None
             else:
-                # assume that the key is a simple atom (fully represented by sub_group_key)
-                if dict_key_index is not None:
-                    raise JaxonError(f"expected {JAXON_DICT_VALUE}({dict_key_index}) but got "
-                        f"simple key attribute {sub_group_key!r} while parsing {debug_path!r}")
-                sub_group_key_data, _ = _split_attrib_name_and_type_info(sub_group_key)
-                dict_key = _simple_atom_from_data_str(sub_group_key_data)
-                if dict_key is _JAXON_MISSING:
-                    raise JaxonError(f"expected simple atom for sub group key {sub_group_key!r}")
-            dbgstr = f"{debug_path}.{_key_to_debugstring(dict_key, i)}"
-            pytree[dict_key] = _load(sub_group, sub_group_key, dbgstr, unmarshalers,
-                load_filter, parents + [dict_key], sub_group_path, loaded_objects,
-                currently_loading_object)
+                if index_in_key is not None:
+                    raise JaxonFormatError(f"expected '{JAXON_DICT_KEY}({i})' to be "
+                        f"followed immediately by '{JAXON_DICT_VALUE}({i})' while loading "
+                        f"{attrib.path()!r}")
+                # assume that the key is a simple atom
+                # (fully represented by sub_attrib.attrib_name)
+                dict_key = simple_atom_from_data_str(sub_attrib.attrib_name, sub_attrib)
+                if dict_key is JAXON_MISSING:
+                    raise JaxonFormatError(f"expected that group key {sub_attrib.attrib_name!r} " \
+                                           f"is a simple atom while loading {attrib.path()!r}")
+            pytree[dict_key] = do_load(sub_attrib, parents + [dict_key], unmarshalers, load_filter)
         return pytree
     if th in ("list", "tuple", "set", "frozenset"):
-        _assert_no_type_arg(ta, th, debug_path)
-        sub_group = group[group_key]
-        pytree = [_load(sub_group, sub_group_key, f"{debug_path}({i})", unmarshalers, load_filter,
-                        parents + [i], sub_group_path, loaded_objects, currently_loading_object)
-                  for i, sub_group_key in enumerate(sub_group.attrs)]
+        assert_no_type_arg(ta, attrib)
+        sub_group = attrib.group.get_group(attrib.attrib_name)
+        pytree = [do_load(sub_attrib, parents + [i], unmarshalers, load_filter)
+                  for i, sub_attrib in enumerate(sub_group.attributes.values())]
         if th == "tuple":
             pytree = tuple(pytree)
         if th == "set":
@@ -421,76 +542,55 @@ def _load_builtin_type(group, attrib_key: str, attrib_name: str, type_info: str,
         if th == "frozenset":
             pytree = frozenset(pytree)
         return pytree
-    raise ValueError(f"base type of object at {debug_path!r} not understood")
+    raise JaxonFormatError(f"type hint {th!r} not understood, expected a "
+                           f"type hint for a jaxon builtin type while loading {attrib.path()!r}")
 
 
-def _build_data_path(group_path: str, attrib_name: str, sub_type_info: list[str]) -> str:
-    data_path = group_path + attrib_name
-    if sub_type_info != [""]:
-        data_path += ":" + "#".join(sub_type_info)
-    return data_path
-
-
-def _load(group,
-          attrib_key: str,
-          debug_path: str,
-          unmarshalers: tuple[Unmarshaler, ...],
-          load_filter: LoadFilter, parents: list[_PathElement],
-          group_path: str,
-          loaded_objects: dict[str, PyTree],
-          currently_loading_attribs: set[str]) -> PyTree:
-    assert group_path[-1] == "/"
+def do_load(attrib: AttribInfo, parents: list[PathElement],
+            unmarshalers: tuple[Unmarshaler, ...], load_filter: LoadFilter) -> PyTree:
+    """Load the pytree represented by `attrib`."""
 
     # check if the user requested loading of the object
-    if not any(p is _DICT_KEY_PATH_ELEMENT for p in parents) and not load_filter(parents):
+    if not any(p is DICT_KEY_PATH_ELEMENT for p in parents) and not load_filter(parents):
         return JaxonNotLoaded()
 
-    # parse attribute key
-    attrib_name, type_info = _split_attrib_name_and_type_info(attrib_key)
-    sub_type_info = [s.strip() for s in type_info.split("#")]
-
-    # Check if the attribute has already been loaded.
-    # This happens if loading was triggered earlier by a reference.
-    # Note that either the entire attribute is loaded
-    # (with all intermediate results from the marshaler) or nothing is loaded.
-    full_data_path = _build_data_path(group_path, attrib_name, sub_type_info)
-    pytree = loaded_objects.get(full_data_path)
-    if pytree is not None:
-        return pytree
+    # check if the attribute has already been loaded
+    if not isinstance(attrib.loaded_pytree, JaxonMissing):
+        return attrib.loaded_pytree
 
     # protected against circular references, which would lead to infinite recursion
-    attrib_path = group_path + attrib_name
-    if attrib_path in currently_loading_attribs:
-        raise CircularPyTreeException()
-    currently_loading_attribs.add(attrib_path)
+    if attrib.is_loading:
+        raise CircularPyTreeError("detected circular reference "
+                                  f"in pytree at {attrib.path()!r}")
+    attrib.is_loading = True
 
-    # load the object, if not already loaded
-    pytree = _load_builtin_type(group, attrib_key, attrib_name, sub_type_info[0], debug_path,
-        unmarshalers, load_filter, parents, group_path, loaded_objects,
-        currently_loading_attribs)
-    if isinstance(pytree, _JaxonLoadedFromReferenceWrapper):
-        # indicates that the result was loaded from a reference
-        # since references to references are not allowed in jaxon
-        # it is not necessary to add the path to loaded_objects
-        pytree = pytree.pytree
-    else:
-        data_path = _build_data_path(group_path, attrib_name, sub_type_info[:1])
-        loaded_objects[data_path] = pytree
-    for i, marshaler_type_info in enumerate(sub_type_info[1:]):
+    # parse type information
+    type_info = [s.strip() for s in attrib.type_info.split("#")]
+
+    # load the attribute
+    # the type specified by type_info[0] must be a builtin type
+    pytree = load_builtin_type(attrib, type_info[0], parents, unmarshalers, load_filter)
+
+    # now apply the unmarshalers (if required) to the loaded builtin type
+    for type_hint in type_info[1:]:
         for unmarshaler in unmarshalers:
-            result = unmarshaler(marshaler_type_info, pytree)
+            try:
+                result = unmarshaler(type_hint, pytree)
+            except Exception as e:
+                e.args = (f"Exception occurred while applying unmarshaler "
+                    f"{unmarshaler.__name__!r} to attribute {attrib.path()!r}: {e.args[0]}",) \
+                    + e.args[1:]
+                raise
             if result is not None:
                 pytree = result
                 break
         else:
-            raise ValueError(f"cannot load object at {debug_path!r}, as type identified by "
-                             f"{marshaler_type_info!r} has no suitable unmarshaler")
-        # register the intermediate result as it might be required by a reference later
-        data_path = _build_data_path(group_path, attrib_name, sub_type_info[:i + 2])
-        loaded_objects[data_path] = pytree
+            raise JaxonFormatError("no suitable unmarshaler found for typehint "
+                f"{type_hint!r} to unmarshal {attrib.path()!r}")
 
     # done loading object
-    currently_loading_attribs.remove(attrib_path)
+    attrib.is_loading = False
+    attrib.loaded_pytree = pytree
     return pytree
 
 
@@ -502,7 +602,7 @@ def load(path_or_file,
          allow_unknown_fields: bool = False,
          load_filter: LoadFilter | None = None) -> PyTree:
     """
-    Load a pytree from an HDF5 file. It must be in the format produced by the ``save`` function.
+    Load a pytree from an HDF5 file. It must be in the format produced by the `save` function.
 
     Parameters
     ----------
@@ -511,53 +611,50 @@ def load(path_or_file,
         Providing a path-like object is the preferred option if possible (see the h5py
         documentation).
     allow_dill : bool, default=False
-        Whether to allow loading objects serialized with ``dill``. If a serialized object is
-        encountered and this argument is ``False``, an error is raised. 
+        Whether to allow loading objects serialized with `dill`. If a serialized object is
+        encountered and this argument is `False`, an error is raised. 
     dill_kwargs : dict or None, optional
-        Extra keyword arguments passed to ``dill.loads`` if ``allow_dill`` is True.
+        Extra keyword arguments passed to `dill.loads` if `allow_dill` is True.
     custom_unmarshalers : Iterable[Unmarshaler]
         If provided, each custom type (identified by its qualified name) is passed
         as the first argument and its marshalled data (in the form of a python standard
         container or another custom object) as the second argument to the the Callables
-        in the order they are provided. The return type shall be either ``None`` indicating
-        that the Callable cannot unmarshal the type or a ``PyTree`` representing the
-        successfully unmarshaled object. The first result that is not ``None`` is used.
-        If all Callables return ``None``, the object is unmarshaled using the ``from_jaxon``
+        in the order they are provided. The return type shall be either `None` indicating
+        that the Callable cannot unmarshal the type or a `PyTree` representing the
+        successfully unmarshaled object. The first result that is not `None` is used.
+        If all Callables return `None`, the object is unmarshaled using the `from_jaxon`
         interface (if available) or the default implementation for dataclasses.
     allow_missing_fields: bool, default=False
-        Do not raise an error if fields are present in the hdf5 file which do not have a
+        Do not raise an error if fields are present in the HDF5 file which do not have a
         corresponding definition in the instantiated dataclass.
     allow_unknown_fields: bool, default=False
         Do not raise an error if fields are defined in a dataclass but are not found in
-        the hdf5 file. The fields will be initialized using their default_factory or default
+        the HDF5 file. The fields will be initialized using their default_factory or default
         value if available. Otherwise, they will be initialized with an instance of
-        ``JaxonNotLoaded``.
+        `JaxonNotLoaded`.
     load_filter: LoadFilter or None
         If provided, the Callable controls what should be loaded. For each leaf or node in
         the pytree, it is called with a list of items that represent the path in the pytree as
-        an argument and shall return ``True`` if the node or leaf shall be loaded and ``False``
+        an argument and shall return `True` if the node or leaf shall be loaded and `False`
         otherwise. For dictionaries the path element is the loaded dict key object, for lists
-        and set like objects it is the index of the element (of type ``int``) and for
+        and set like objects it is the index of the element (of type `int`) and for
         dataclasses it is the field name. If the pytree node or leaf is not loaded, it is
-        replaced with an instance of ``JaxonNotLoaded``. Note: dict keys are always loaded
+        replaced with an instance of `JaxonNotLoaded`. Note: dict keys are always loaded
         regardless of the filter — without them the dict cannot be reconstructed.
     """
+    if dill_kwargs is None:
+        dill_kwargs = {}
+    if load_filter is None:
+        def no_filter(_):
+            return True
+        load_filter = no_filter
+    unmarshalers = list(custom_unmarshalers)
+    unmarshalers += [
+        jaxon_interface_unmarshaler,
+        supply_dataclass_unmarshaler(allow_missing_fields, allow_unknown_fields),
+        supply_dill_unmarshaler(allow_dill, dill_kwargs)
+    ]
     with h5py.File(path_or_file, 'r') as file:
-        # a type hint might have been added to the JAXON_ROOT_GROUP_KEY
-        attrib_key = next((attrib_key for attrib_key in file.attrs
-                          if attrib_key.startswith(JAXON_ROOT_GROUP_KEY)), None)
-        if attrib_key is None:
-            raise JaxonError("jaxon root group not found")
-        if dill_kwargs is None:
-            dill_kwargs = {}
-        if load_filter is None:
-            def no_filter(_):
-                return True
-            load_filter = no_filter
-        unmarshalers = list(custom_unmarshalers)
-        unmarshalers += [
-            _jaxon_interface_unmarshaler,
-            _supply_dataclass_unmarshaler(allow_missing_fields, allow_unknown_fields),
-            _supply_dill_unmarshaler(allow_dill, dill_kwargs)
-        ]
-        return _load(file, attrib_key, "", tuple(unmarshalers), load_filter, [], "/", {}, set())
+        root_group = GroupInfo(file, "/", None)
+        root_attrib = root_group.get_attrib(JAXON_ROOT_GROUP_KEY)
+        return do_load(root_attrib, [], tuple(unmarshalers), load_filter)

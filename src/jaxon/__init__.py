@@ -55,9 +55,13 @@ from ._common import (
     JAXON_NUMPY_STR,
     JAXON_NUMPY_BYTES,
     JAXON_NUMPY_VOID,
+    JaxonWarning,
     JaxonFormatWarning,
+    JaxonTypeWarning,
     JaxonError,
-    CircularPyTreeException,
+    JaxonFormatError,
+    CircularPyTreeError,
+    JaxonTypeError,
     JaxonNotLoaded,
     has_common_prefix
 )
@@ -98,9 +102,13 @@ __all__ = [
     "JAXON_NUMPY_STR",
     "JAXON_NUMPY_BYTES",
     "JAXON_NUMPY_VOID",
+    "JaxonWarning",
     "JaxonFormatWarning",
+    "JaxonTypeWarning",
     "JaxonError",
-    "CircularPyTreeException",
+    "JaxonFormatError",
+    "CircularPyTreeError",
+    "JaxonTypeError",
     "JaxonNotLoaded",
     "has_common_prefix"
 ]

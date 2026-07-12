@@ -56,15 +56,15 @@ class CustomTypeReturnDict(PyTreeTestNode):
         return (self.a,)
 
 
-class CustomTypeReturnField(PyTreeTestNode):
+class CustomTypeReturnTuple(PyTreeTestNode):
     def __init__(self, a):
         self.a = a
 
     def from_jaxon(self, jaxon):
-        self.a = jaxon
+        self.a = jaxon[0]
 
     def to_jaxon(self):
-        return self.a
+        return (self.a,)
 
     def __hash__(self) -> int:
         return hash(self.a)
@@ -73,7 +73,7 @@ class CustomTypeReturnField(PyTreeTestNode):
         return f"CustomTypeReturnField({self.a!r})"
 
     def __eq__(self, other) -> bool:
-        return isinstance(other, CustomTypeReturnField) and self.a == other.a
+        return isinstance(other, CustomTypeReturnTuple) and self.a == other.a
 
     @override
     def children(self) -> tuple:

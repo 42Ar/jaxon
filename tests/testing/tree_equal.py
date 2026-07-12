@@ -12,9 +12,10 @@ from typing import assert_never
 from abc import ABC, abstractmethod
 import numpy as np
 import jax.numpy as jnp
-from jaxon._common import _JAXON_JAX_ARRAY_TYPE, JAXON_PY_NUMERIC_TYPES, \
-    JAXON_NUMPY_ATOMIC_TYPES, JaxonNotLoaded, JaxonNumpyNumeric, JAXON_PY_CONTAINER_TYPES
-from jaxon._save import _base_type
+from jaxon._common import JAXON_JAX_ARRAY_TYPE, JAXON_PY_NUMERIC_TYPES, \
+    JAXON_NUMPY_ATOMIC_TYPES, JaxonNotLoaded, JaxonNumpyNumeric, JAXON_PY_CONTAINER_TYPES, \
+    MIN_LENGTH_FOR_REFERENCEABLE_STR
+from jaxon._save import base_type
 
 
 class PyTreeTestNode(ABC):
@@ -27,15 +28,14 @@ class DillObject:
     """Flag to indicate an object that is serialized with dill."""
 
 
-def _is_non_reference_type(pytree, downcast_to_base_types, py_to_np_types) -> bool:
-    """If this function returns True it doesn't mean that the type cannot be
-    referenced within the hdf5 file, it just means that a reference check should
-    not be performed because the type might be interned by python."""
-    base_type = _base_type(pytree, JAXON_PY_NUMERIC_TYPES | {str, bytes, tuple, frozenset},
-        downcast_to_base_types)
-    return pytree is None or pytree is Ellipsis \
-        or (base_type is not None and base_type not in py_to_np_types) \
-        or isinstance(pytree, range)
+def _is_non_reference_type(pytree, downcast_to_base_types) -> bool:
+    """If this function returns `True` a reference check should not be performed."""
+    base = base_type(pytree, JAXON_PY_NUMERIC_TYPES | {str, bytes, tuple, frozenset},
+                     downcast_to_base_types)
+    return (pytree is None or pytree is Ellipsis
+        or (base is not None
+            and (base is not str or len(pytree) < MIN_LENGTH_FOR_REFERENCEABLE_STR))
+        or isinstance(pytree, range))
 
 
 def _assert_real_equal(x, y):
@@ -56,9 +56,9 @@ def _assert_numbers_equal(saved, loaded):
 
 
 def _is_type(saved, loaded, types, downcast_to_base_types):
-    base_type = _base_type(saved, types, downcast_to_base_types)
-    assert base_type is None or base_type is type(loaded)
-    return base_type is not None
+    base = base_type(saved, types, downcast_to_base_types)
+    assert base is None or base is type(loaded)
+    return base is not None
 
 
 def assert_array_equal(a, b, xp):
@@ -82,7 +82,7 @@ def _assert_tree_equal(saved, loaded, downcast_to_base_types, py_to_np_types,
     assert type(saved) is not JaxonNotLoaded, "found JaxonNotLoaded where it should not be"
 
     # check if references in both trees are the same
-    if not _is_non_reference_type(saved, downcast_to_base_types, py_to_np_types):
+    if not _is_non_reference_type(saved, downcast_to_base_types):
         checked_saved = id(saved) in checked_objects_saved
         checked_loaded = id(loaded) in checked_objects_loaded
         # if an object has (not) been seen in saved it must also have (not) been seen in loaded
@@ -97,7 +97,7 @@ def _assert_tree_equal(saved, loaded, downcast_to_base_types, py_to_np_types,
     if saved is None or saved is Ellipsis:
         assert saved is loaded
         return
-    py_numeric_type = _base_type(saved, JAXON_PY_NUMERIC_TYPES, downcast_to_base_types)
+    py_numeric_type = base_type(saved, JAXON_PY_NUMERIC_TYPES, downcast_to_base_types)
     if py_numeric_type is not None:
         if py_numeric_type in py_to_np_types:
             saved = np.array(saved)[()]
@@ -131,7 +131,7 @@ def _assert_tree_equal(saved, loaded, downcast_to_base_types, py_to_np_types,
     if _is_type(saved, loaded, (np.ndarray,), downcast_to_base_types):
         assert_array_equal(saved, loaded, np)
         return
-    if _is_type(saved, loaded, (_JAXON_JAX_ARRAY_TYPE,), downcast_to_base_types):
+    if _is_type(saved, loaded, (JAXON_JAX_ARRAY_TYPE,), downcast_to_base_types):
         assert_array_equal(saved, loaded, jnp)
         return
     if _is_type(saved, loaded, (bytes, bytearray), downcast_to_base_types):
@@ -173,7 +173,8 @@ def _assert_tree_equal(saved, loaded, downcast_to_base_types, py_to_np_types,
                 del unmatched[i]
             return
         assert_never(loaded)  # pragma: no cover
-    if isinstance(loaded, PyTreeTestNode):
+    if isinstance(saved, PyTreeTestNode):
+        assert type(loaded) is type(saved)
         if isinstance(saved, DillObject):
             # special handling for descending into dill object
             # references of objects inside the dilled object to jaxon objects are broken
@@ -182,7 +183,6 @@ def _assert_tree_equal(saved, loaded, downcast_to_base_types, py_to_np_types,
             py_to_np_types = tuple()
             checked_objects_saved = set()
             checked_objects_loaded = set()
-        assert type(loaded) is type(saved)
         ch1 = loaded.children()
         ch2 = saved.children()
         assert len(ch1) == len(ch2)

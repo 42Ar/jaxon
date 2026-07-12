@@ -21,9 +21,7 @@ utility functions.
 
 
 from types import EllipsisType
-from typing import Any, Callable, Iterable, Union
-from dataclasses import dataclass
-import dataclasses
+from typing import Any, Callable, Iterable
 import numpy as np
 import jax
 
@@ -76,16 +74,19 @@ JaxonBuiltin = JaxonAtomic | JaxonPyContainer | np.ndarray | jax.Array
 
 # type alias
 PyTree = Any
-_PathElement = Any
+PathElement = Any
 Marshaler = Callable[[PyTree], tuple[str, PyTree] | None]
 Unmarshaler = Callable[[str, PyTree], PyTree | None]
-LoadFilter = Callable[[list[_PathElement]], bool]
-_JAXON_JAX_ARRAY_TYPE = type(jax.numpy.array([]))  # get the type of a jax array
+LoadFilter = Callable[[list[PathElement]], bool]
+JAXON_JAX_ARRAY_TYPE = type(jax.numpy.array([]))  # get the type of a jax array
                                                    # (in a version-independent way)
 
+# string shorter than this can never be referenced (copies are stored)
+# string of equal or greater length are stored only once
+MIN_LENGTH_FOR_REFERENCEABLE_STR = 15
 
 # table to convert jaxon to numpy type
-_JAXON_JAX_TO_NUMPY_TYPE = {
+JAXON_JAX_TO_NUMPY_TYPE = {
     'uint2':              np.uint8,    # 2-bit unsigned  → uint8
     'uint4':              np.uint8,    # 4-bit unsigned  → uint8
     'int2':               np.int8,     # 2-bit signed    → int8
@@ -123,38 +124,44 @@ JAXON_NUMPY_BYTES = "numpy.bytes_"  # typehint for numpy.bytes_
 JAXON_NUMPY_VOID = "numpy.void"     # typehint for numpy.void
 
 
-class _JaxonMissing:
+class JaxonMissing:
     """Internal singleton flag object to indicate an unavailable result."""
     __slots__ = ()
-_JAXON_MISSING = _JaxonMissing()
+JAXON_MISSING = JaxonMissing()
 
 
-class _DictKeyPathElement:
+class DictKeyPathElement:
     """Internal singleton flag object to indicate that loader descended into a dict key."""
     __slots__ = ()
-_DICT_KEY_PATH_ELEMENT = _DictKeyPathElement()
+DICT_KEY_PATH_ELEMENT = DictKeyPathElement()
 
 
-@dataclass(frozen=True)
-class _JaxonLoadedFromReferenceWrapper:
-    """Indicates that the wrapped object has been loaded from a reference."""
-    pytree: PyTree
+class JaxonWarning(UserWarning):
+    """Base class for all warnings raised by Jaxon."""
 
 
-class JaxonFormatWarning(UserWarning):
-    """Warning that indicates an incompatible hdf5 file"""
+class JaxonFormatWarning(JaxonWarning):
+    """Warning that indicates an incompatible HDF5 file."""
+
+
+class JaxonTypeWarning(JaxonWarning):
+    """Warning that indicates an incompatible type in a pytree."""
 
 
 class JaxonError(RuntimeError):
-    """Base class for all errors raised by Jaxon"""
+    """Base class for all errors raised by Jaxon."""
 
 
 class JaxonFormatError(JaxonError):
-    """Error that indicates an incompatible hdf5 file"""
+    """Error that indicates an incompatible HDF5 file."""
 
 
-class CircularPyTreeException(JaxonError):
+class CircularPyTreeError(JaxonError):
     """Raised when a circular reference (reference to a parent object) was detected."""
+
+
+class JaxonTypeError(JaxonError):
+    """Error that indicates an incompatible type in a pytree."""
 
 
 class JaxonNotLoaded:
@@ -173,65 +180,13 @@ class JaxonNotLoaded:
         return hash(type(self))
 
 
-@dataclass
-class _JaxonDict:
-    """Internal representation of a dict."""
-    data: list[tuple['_JaxonAtom', '_JaxonAtom']] = dataclasses.field(default_factory=list)
-
-
-@dataclass
-class _JaxonList:
-    """Internal representation of a list, tuple, set or frozenset."""
-    data: list['_JaxonAtom'] = dataclasses.field(default_factory=list)
-
-
-_JaxonPrimitive = Union[JaxonNumpyAtomic, np.ndarray, str, _JaxonList, _JaxonDict, "_JaxonAtom"]
-
-
-@dataclass
-class _JaxonAtom:
-    """Internal representation of any data item (including containers). The `data`
-    field encodes the actual data which has been converted to a smaller subset
-    of possible types, which are `_JaxonPrimitive`. For some types it is necessary
-    to have an additional `typehint` (and possibly a typearg) to reconstruct the
-    original type of `data`. The field `original_obj` holds a reference to the object
-    that has been converted to `data`."""
-    data: _JaxonPrimitive
-    typehint: str = ""
-    original_obj: PyTree | None = None
-    can_be_referenced: bool = True
-    data_path: str | None = None
-
-    def __post_init__(self):
-        assert type(self.data) in _JAXON_PRIMITIVE_TYPES, "tried to construct _JaxonAtom " \
-            "with invalid data type"
-        assert self.typehint == self.typehint.strip(), "whitespace not allowed"
-
-    def is_simple(self) -> bool:
-        """A simple atom can be used as a group or attribute key in the HDF5 file
-        and reconstructed from the key data alone. For this, the atom cannot have
-        a typehint and `self.data` must be a `numpy.str_` that does not contain
-        null chars."""
-        return self.typehint == "" and type(self.data) is str and "\0" not in self.data
-
-
-_JAXON_PRIMITIVE_TYPES = JAXON_NUMPY_ATOMIC_TYPES | \
-    {np.ndarray, str, _JaxonList, _JaxonDict, _JaxonAtom}
-
-
 def has_common_prefix(path: Iterable, other_path: Iterable) -> bool:
     """Checks if the two Iterables start with the same values. If one of the Iterables
     is longer than the additional items are ignored."""
     return all(map(lambda ab: ab[0] == ab[1], zip(path, other_path)))
 
 
-def _get_qualified_name(obj) -> str:
+def get_qualified_name(obj) -> str:
     """The returned name fully identifies the class of the object so that a new object can be
     instantiated later during loading (see `_create_instance`)."""
     return type(obj).__module__ + "." + type(obj).__qualname__
-
-
-def _key_to_debugstring(dict_key, i) -> str:
-    if isinstance(dict_key, (str, int, float, bool, complex)):
-        return repr(dict_key)
-    return f"{i}"

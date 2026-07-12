@@ -18,10 +18,12 @@ import pytest
 import jax.numpy as jnp
 import numpy as np
 from numpy.random import default_rng, SeedSequence
-from jaxon import load, save, CircularPyTreeException, JaxonNotLoaded, PyTree, \
-    JaxonFormatWarning, has_common_prefix, JAXON_PY_NUMERIC_TYPES, JAXON_PY_CONTAINER_TYPES
+from jaxon import load, save, CircularPyTreeError, JaxonNotLoaded, PyTree, \
+    JaxonFormatWarning, has_common_prefix, JAXON_PY_NUMERIC_TYPES, JAXON_PY_CONTAINER_TYPES, \
+    JaxonTypeWarning, JaxonTypeError
+from jaxon._common import JaxonFormatError
 from .testing.classes import CustomDataclass, ObjectForDill, CustomTypeReturnDict, \
-    CustomTypeReturnField
+    CustomTypeReturnTuple
 from .testing.data import TEST_JAXON_ATOMIC, TEST_NUMPY_ARRAY_VALUES, TEST_JAX_ARRAY_DTYPES, \
     get_jax_array_values
 from .testing.tree_equal import assert_tree_equal, PyTreeTestNode
@@ -140,7 +142,7 @@ def test_type_downcast_and_int_conversion():
 def test_custom_types():
     pytree = {
         "return_dict": CustomTypeReturnDict(3),
-        "return_custom": CustomTypeReturnField(CustomTypeReturnDict(6)),
+        "return_custom": CustomTypeReturnTuple(CustomTypeReturnDict(6)),
     }
     run_roundtrip_test(pytree)
 
@@ -163,7 +165,7 @@ def test_nonstring_dict_keys():
         (1, 2): 8,
         "1": "2",
         (3, 4): np.arange(42),
-        CustomTypeReturnField((324, 34)): 24,
+        CustomTypeReturnTuple((324, 34)): 24,
         CustomDataclass(234, "a"): "v",
         ObjectForDill(1): "x"
     }
@@ -172,8 +174,8 @@ def test_nonstring_dict_keys():
 
 def test_nested_type_conversion():
     pytree = {
-        CustomTypeReturnField(CustomTypeReturnField(CustomDataclass(1, "4"))):
-        CustomDataclass(CustomTypeReturnField(CustomTypeReturnField(1)))
+        CustomTypeReturnTuple(CustomTypeReturnTuple(CustomDataclass(1, "4"))):
+        CustomDataclass(CustomTypeReturnTuple(CustomTypeReturnTuple(1)))
     }
     run_roundtrip_test(pytree)
 
@@ -193,14 +195,6 @@ def test_custom_dataclass():
     run_roundtrip_test(pytree)
 
 
-def test_reference_to_marshaler_intermediate():
-    a = []
-    b = CustomTypeReturnField(a)
-    c = CustomTypeReturnField(b)
-    pytree = (c, CustomTypeReturnField(b))
-    run_roundtrip_test(pytree)
-
-
 def test_reference_with_escape_symbols():
     a = []
     pytree = {"\\": a, "d": a}
@@ -210,26 +204,6 @@ def test_reference_with_escape_symbols():
 def test_fuzzing():
     for pytree in fuzz_tree_generator(1000):
         run_roundtrip_test(pytree, allow_dill=True)
-
-
-def test_error_circular_reference_detection():
-    def trigger_circular_reference_exception():
-        pytree = {}
-        pytree["a"] = pytree
-        with tempfile.TemporaryFile() as fp:
-            save(fp, pytree)
-    with pytest.raises(CircularPyTreeException):
-        trigger_circular_reference_exception()
-
-
-def test_error_unsupported_object():
-    def trigger_unsupported_type_exception():
-        with tempfile.TemporaryFile() as fp:
-            class Custom:
-                pass
-            save(fp, Custom())
-    with pytest.raises(TypeError):
-        trigger_unsupported_type_exception()
 
 
 def test_truncate_fp():
@@ -281,67 +255,6 @@ def test_custom_marshaler():
         assert_tree_equal(pytree, loaded)
 
 
-def test_missing_fields():
-    def run_test_missing_fields(**kwargs):
-        with tempfile.TemporaryFile() as fp:
-            Dynamic = make_dataclass(
-                "Dynamic",
-                [("a", int), ("b", float)],
-            )
-            module = sys.modules[__name__]
-            setattr(module, "Dynamic", Dynamic)
-            pytree = Dynamic(a=123, b=2.0)
-            assert len(fields(pytree)) == 2
-            save(fp, pytree)
-            Dynamic = make_dataclass(
-                "Dynamic",
-                [("a", int)],
-            )
-            setattr(module, "Dynamic", Dynamic)
-            loaded_pytree = load(fp, **kwargs)
-            assert loaded_pytree.a == pytree.a
-            assert type(loaded_pytree.a) is type(pytree.a)
-            assert len(fields(loaded_pytree)) == 1
-    with pytest.raises(ValueError):
-        run_test_missing_fields(allow_missing_fields=False)
-    with pytest.warns(JaxonFormatWarning):
-        run_test_missing_fields(allow_missing_fields=True)
-
-
-def test_unknown_fields():
-    def run_test_unknown_fields(**kwargs):
-        with tempfile.TemporaryFile() as fp:
-            Dynamic = make_dataclass(
-                "Dynamic",
-                [("existing", int)],
-            )
-            module = sys.modules[__name__]
-            setattr(module, "Dynamic", Dynamic)
-            pytree = Dynamic(existing=123)
-            assert len(fields(pytree)) == 1
-            save(fp, pytree)
-            Dynamic = make_dataclass(
-                "Dynamic",
-                [("existing", int),
-                 ("missing_mandatory", float),
-                 ("missing_default", float, field(default=2)),
-                 ("missing_default_factory", float, field(default_factory=lambda: 3)),
-                 ("missing_default_factory_no_init",
-                  float, field(default_factory=lambda: 5, init=False))],
-            )
-            setattr(module, "Dynamic", Dynamic)
-            loaded_pytree = load(fp, **kwargs)
-            assert loaded_pytree.existing == 123
-            assert type(loaded_pytree.missing_mandatory) is JaxonNotLoaded
-            assert loaded_pytree.missing_default == 2
-            assert loaded_pytree.missing_default_factory == 3
-            assert loaded_pytree.missing_default_factory_no_init == 5
-    with pytest.raises(ValueError):
-        run_test_unknown_fields(allow_unknown_fields=False)
-    with pytest.warns(JaxonFormatWarning):
-        run_test_unknown_fields(allow_unknown_fields=True)
-
-
 def test_load_filter():
     with tempfile.TemporaryFile() as fp:
         save(fp, {"a": {"a": 2}, "b": [CustomDataclass({"a": 5}, 3), "c"]})
@@ -388,7 +301,106 @@ def test_reference_recovery_if_partially_loaded():
         assert_tree_equal(expected_pytree, loaded)
 
 
-def test_numpy_array_with_title():
-    x = np.array([(b'Rex', 9, 81.0), (b'Fido', 3, 27.0)],
-        dtype=[('name', 'V10'), ('age', 'i4'), ('weight', 'f4')])
+def test_structured_numpy_array():
+    x = np.array([((b'A', b'B'), 9, 1.1), ((b'C', b'D'), 3, 7.2)],
+        dtype=[('d', [('h', 'V10'), ('i', 'V10')]), ('b', 'i4'), ('g', 'f4')])
     run_roundtrip_test(x)
+
+
+def test_warn_numpy_array_with_title():
+    with pytest.warns(JaxonTypeWarning):
+        x = np.array([(b'A', 9, 81.0), (b'B', 3, 27.0)],
+            dtype=[(('sd', 'd'), 'V10'), ('b', 'i4'), ('g', 'f4')])
+        with tempfile.TemporaryFile() as fp:
+            save(fp, x)
+
+
+def test_raise_numpy_array_with_unsupported_dtype():
+    with pytest.raises(JaxonTypeError):
+        with tempfile.TemporaryFile() as fp:
+            save(fp, np.array([], dtype=np.object_))
+    with pytest.raises(JaxonTypeError):
+        with tempfile.TemporaryFile() as fp:
+            save(fp, np.array(["A"], dtype='U10'))
+    with pytest.raises(JaxonTypeError):
+        with tempfile.TemporaryFile() as fp:
+            save(fp, np.array(["A"], dtype=[('a', [('b', 'U10')])]))
+
+
+def test_raise_circular_reference():
+    def trigger_circular_reference_exception():
+        pytree = {}
+        pytree["a"] = pytree
+        with tempfile.TemporaryFile() as fp:
+            save(fp, pytree)
+    with pytest.raises(CircularPyTreeError):
+        trigger_circular_reference_exception()
+
+
+def test_raise_unsupported_type():
+    with pytest.raises(JaxonTypeError):
+        class Custom:
+            pass
+        with tempfile.TemporaryFile() as fp:
+            save(fp, Custom())
+
+
+def test_raise_and_warn_missing_fields():
+    def run_test_missing_fields(**kwargs):
+        with tempfile.TemporaryFile() as fp:
+            Dynamic = make_dataclass(
+                "Dynamic",
+                [("a", int), ("b", float)],
+            )
+            module = sys.modules[__name__]
+            setattr(module, "Dynamic", Dynamic)
+            pytree = Dynamic(a=123, b=2.0)
+            assert len(fields(pytree)) == 2
+            save(fp, pytree)
+            Dynamic = make_dataclass(
+                "Dynamic",
+                [("a", int)],
+            )
+            setattr(module, "Dynamic", Dynamic)
+            loaded_pytree = load(fp, **kwargs)
+            assert loaded_pytree.a == pytree.a
+            assert type(loaded_pytree.a) is type(pytree.a)
+            assert len(fields(loaded_pytree)) == 1
+    with pytest.raises(JaxonFormatError):
+        run_test_missing_fields(allow_missing_fields=False)
+    with pytest.warns(JaxonFormatWarning):
+        run_test_missing_fields(allow_missing_fields=True)
+
+
+def test_raise_and_warn_unknown_fields():
+    def run_test_unknown_fields(**kwargs):
+        with tempfile.TemporaryFile() as fp:
+            Dynamic = make_dataclass(
+                "Dynamic",
+                [("existing", int)],
+            )
+            module = sys.modules[__name__]
+            setattr(module, "Dynamic", Dynamic)
+            pytree = Dynamic(existing=123)
+            assert len(fields(pytree)) == 1
+            save(fp, pytree)
+            Dynamic = make_dataclass(
+                "Dynamic",
+                [("existing", int),
+                 ("missing_mandatory", float),
+                 ("missing_default", float, field(default=2)),
+                 ("missing_default_factory", float, field(default_factory=lambda: 3)),
+                 ("missing_default_factory_no_init",
+                  float, field(default_factory=lambda: 5, init=False))],
+            )
+            setattr(module, "Dynamic", Dynamic)
+            loaded_pytree = load(fp, **kwargs)
+            assert loaded_pytree.existing == 123
+            assert type(loaded_pytree.missing_mandatory) is JaxonNotLoaded
+            assert loaded_pytree.missing_default == 2
+            assert loaded_pytree.missing_default_factory == 3
+            assert loaded_pytree.missing_default_factory_no_init == 5
+    with pytest.raises(JaxonFormatError):
+        run_test_unknown_fields(allow_unknown_fields=False)
+    with pytest.warns(JaxonFormatWarning):
+        run_test_unknown_fields(allow_unknown_fields=True)
