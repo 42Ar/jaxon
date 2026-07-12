@@ -20,6 +20,7 @@ representation and storing it into the HDF5 file.
 """
 
 
+from importlib.metadata import version
 from typing import Iterable, assert_never, Union
 import warnings
 from dataclasses import dataclass, is_dataclass, fields, field
@@ -31,8 +32,8 @@ from ._common import (
     JAXON_NUMPY_BYTES, JAXON_NUMPY_VOID, JAXON_PY_CONTAINER_TYPES, PyTree, Marshaler,
     JAXON_NUMPY_ATOMIC_TYPES, JaxonPyNumeric, JAXON_PY_NUMERIC_TYPES, JAXON_NUMPY_NUMERIC_TYPES,
     JAXON_NUMPY_NUMERIC_DTYPES, JAXON_JAX_ARRAY_TYPE, JAXON_NONE, JAXON_ELLIPSIS,
-    JAXON_ROOT_GROUP_KEY, JAXON_DICT_KEY, JAXON_DICT_VALUE, CircularPyTreeError,
-    get_qualified_name, JAXON_JAX_TO_NUMPY_TYPE, JaxonNumpyAtomic,
+    JAXON_ROOT_GROUP_KEY, JAXON_DICT_KEY, JAXON_DICT_VALUE, JAXON_VERSION_GROUP_KEY,
+    CircularPyTreeError, get_qualified_name, JAXON_JAX_TO_NUMPY_TYPE, JaxonNumpyAtomic,
     MIN_LENGTH_FOR_REFERENCEABLE_STR, JaxonTypeWarning, JaxonTypeError
 )
 
@@ -497,4 +498,5 @@ def save(path_or_file, pytree: PyTree,
         path_or_file.seek(0)
         path_or_file.truncate()
     with h5py.File(path_or_file, 'w', track_order=True) as file:
+        file.attrs[JAXON_VERSION_GROUP_KEY] = version('jaxon')
         store_atom(file, root_atom, JAXON_ROOT_GROUP_KEY, "/")

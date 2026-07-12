@@ -117,6 +117,7 @@ JAXON_DICT_VALUE = "value"  # used to indicate that this HDF5 attribute stores
                             # a dict value (only used iff `JAXON_DICT_KEY` is used)
 JAXON_ROOT_GROUP_KEY = "JAXON_ROOT"  # HDF5 root group name (might be followed by typehint of
                                      # the root object)
+JAXON_VERSION_GROUP_KEY = "JAXON_VERSION"
 JAXON_JAX_ARRAY = "jax.Array"       # typehint for jax arrays
 JAXON_NUMPY_ARRAY = "numpy.ndarray" # typehint for numpy arrays
 JAXON_NUMPY_STR = "numpy.str_"      # typehint for numpy.str_

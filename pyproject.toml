@@ -37,6 +37,12 @@ test = [
     "pytest-cov",
 ]
 
+[tool.coverage.run]
+omit = [
+    "tests/*",
+    "src/jaxon/v1_2_0/*",
+]
+
 [project.urls]
 Homepage = "https://github.com/42Ar/jaxon"
 Repository = "https://github.com/42Ar/jaxon"

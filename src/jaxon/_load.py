@@ -34,7 +34,7 @@ from ._common import (
     JaxonFormatError, JAXON_DICT_KEY, JAXON_DICT_VALUE, JAXON_ROOT_GROUP_KEY,
     JaxonFormatWarning, JaxonError, CircularPyTreeError, DICT_KEY_PATH_ELEMENT,
     JAXON_MISSING, JaxonBuiltin, get_qualified_name, JAXON_TRUE, JAXON_FALSE,
-    JaxonMissing
+    JaxonMissing, JAXON_VERSION_GROUP_KEY
 )
 
 
@@ -511,7 +511,8 @@ def load_builtin_type(attrib: AttribInfo, type_info: str, parents: list[PathElem
                                  unmarshalers, load_filter)
                 continue
             if sub_attrib.attrib_name.startswith(JAXON_DICT_VALUE):
-                index_in_value = parse_key_or_val(sub_attrib.attrib_name, JAXON_DICT_VALUE, sub_group)
+                index_in_value = parse_key_or_val(sub_attrib.attrib_name, JAXON_DICT_VALUE,
+                                                  sub_group)
                 if index_in_key is None or index_in_value != index_in_key:
                     raise JaxonFormatError(f"encountered {JAXON_DICT_VALUE}({index_in_key}) "
                         f"without a preceding matching {JAXON_DICT_KEY}({index_in_key}) "
@@ -655,6 +656,16 @@ def load(path_or_file,
         supply_dill_unmarshaler(allow_dill, dill_kwargs)
     ]
     with h5py.File(path_or_file, 'r') as file:
+        if JAXON_VERSION_GROUP_KEY not in file.attrs:
+            # assume this file was written with a version prior v2.0.0
+            group_key = next((group_key for group_key in file.attrs
+                if group_key.startswith(JAXON_ROOT_GROUP_KEY)), None)
+            if group_key is None:
+                raise JaxonError("jaxon root group not found")
+            from jaxon.v1_2_0._load import _load as _load_v_1_2_0
+            return _load_v_1_2_0(file, group_key, allow_dill, dill_kwargs, "",
+                tuple(custom_unmarshalers), allow_missing_fields, allow_unknown_fields,
+                load_filter, [], tuple(), {}, set())
         root_group = GroupInfo(file, "/", None)
         root_attrib = root_group.get_attrib(JAXON_ROOT_GROUP_KEY)
         return do_load(root_attrib, [], tuple(unmarshalers), load_filter)

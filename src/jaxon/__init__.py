@@ -22,7 +22,7 @@ Author
 Frank Hermann
 """
 
-
+from importlib.metadata import version
 from ._common import (
     JaxonNumpyNumeric,
     JAXON_NUMPY_NUMERIC_TYPES,
@@ -50,6 +50,7 @@ from ._common import (
     JAXON_DICT_KEY,
     JAXON_DICT_VALUE,
     JAXON_ROOT_GROUP_KEY,
+    JAXON_VERSION_GROUP_KEY,
     JAXON_JAX_ARRAY,
     JAXON_NUMPY_ARRAY,
     JAXON_NUMPY_STR,
@@ -67,6 +68,8 @@ from ._common import (
 )
 from ._save import save
 from ._load import load
+
+__version__ = version('jaxon')
 
 __all__ = [
     "save",
@@ -97,6 +100,7 @@ __all__ = [
     "JAXON_DICT_KEY",
     "JAXON_DICT_VALUE",
     "JAXON_ROOT_GROUP_KEY",
+    "JAXON_VERSION_GROUP_KEY",
     "JAXON_JAX_ARRAY",
     "JAXON_NUMPY_ARRAY",
     "JAXON_NUMPY_STR",

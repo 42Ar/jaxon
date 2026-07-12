@@ -8,6 +8,7 @@ Author
 Frank Hermann
 """
 
+import importlib
 from typing import override
 from dataclasses import make_dataclass, fields, field
 from pathlib import Path
@@ -17,11 +18,12 @@ import random
 import pytest
 import jax.numpy as jnp
 import numpy as np
+import h5py
 from numpy.random import default_rng, SeedSequence
 from jaxon import load, save, CircularPyTreeError, JaxonNotLoaded, PyTree, \
     JaxonFormatWarning, has_common_prefix, JAXON_PY_NUMERIC_TYPES, JAXON_PY_CONTAINER_TYPES, \
-    JaxonTypeWarning, JaxonTypeError
-from jaxon._common import JaxonFormatError
+    JaxonTypeWarning, JaxonTypeError, JAXON_NUMPY_NUMERIC_TYPES, __version__
+from jaxon._common import JAXON_ROOT_GROUP_KEY, JAXON_VERSION_GROUP_KEY, JaxonFormatError
 from .testing.classes import CustomDataclass, ObjectForDill, CustomTypeReturnDict, \
     CustomTypeReturnTuple
 from .testing.data import TEST_JAXON_ATOMIC, TEST_NUMPY_ARRAY_VALUES, TEST_JAX_ARRAY_DTYPES, \
@@ -31,10 +33,13 @@ from .testing.fuzz import fuzz_tree_generator, rand_str
 
 
 def do_roundtrip(pytree, exact_python_numeric_types=True, allow_dill=False,
-                 downcast_to_base_types=None):
+                 downcast_to_base_types=None, version=None):
     with tempfile.TemporaryFile() as fp:
-        save(fp, pytree, exact_python_numeric_types=exact_python_numeric_types,
-             downcast_to_base_types=downcast_to_base_types, allow_dill=allow_dill)
+        save_api = save
+        if version is not None:
+            save_api = importlib.import_module(f"jaxon.{version}").save
+        save_api(fp, pytree, exact_python_numeric_types=exact_python_numeric_types,
+                 downcast_to_base_types=downcast_to_base_types, allow_dill=allow_dill)
         return load(fp, allow_dill=allow_dill)
 
 
@@ -307,12 +312,92 @@ def test_structured_numpy_array():
     run_roundtrip_test(x)
 
 
+def test_cross_version_loading_v1_2_0():
+    pytree = {
+        "complex": 1j + 5,
+        "bool": True,
+        "bool2": False,
+        "None": None,
+        "string": "string",
+        "string_with_quotes1": "'",
+        "string_with_quotes2": '"',
+        "string_with_quotes3": '"\'',
+        "string_with_quotes_and_slashes": '/',
+        "string_with_quotes_and_backslashes": '/bk/asd\\/sd\\\\//\\/',
+        "string_with_zeros": '\0sfddf\0asdf',
+        "string_with_trailing_zeros": '\0sfddf\0asdf\0\0',
+        "string_with_trailing_zeros_and_non_ascii": '\0sfddf\0asdöüüäöüöäöüöüf\0\0'*5,
+        "string_with_colons_1": ":sdffds:asd:::ads:",
+        "string_with_colons_2": ":",
+        ":": "234",
+        "sdf:sdffds": "34",
+        "'": "",
+        '"': "",
+        "\0sfddf\0asdf": "",
+        "\0sfddf\0asdf\0\0": "",
+        "\0sfddf\0asdöüüäöüöäöüöüf\0\0": "",
+        "öäööääööäöä": "",
+        "list": [4, "asf"],
+        "tuple": (4, 3, "dsf", 5.5),
+        "bytes": b"xfg",
+        "bytes_with_zeros": b"sdf\0sdf\0\0sdf",
+        "bytes_with_trailing_zeros": b"sdf\0sdf\0\0sdf\0\0",
+        "int64": np.int64(313245),
+        "float64": np.float64(3465.34),
+        "int32": np.int32(487),
+        "scalars": [scalar_type(0) for scalar_type in JAXON_NUMPY_NUMERIC_TYPES],
+        "npbool": np.bool_(3465.34),
+        "complex128": np.complex128(123 + 32j),
+        "key/with/slashes": {
+            "more/slahes": 5
+        },
+        "set": {231, "afsdd", 2342, "weffd"},
+        "fset": frozenset([234, 234, 234]),
+        "range1": range(23),
+        "range2": range(2, 23),
+        "range3": range(2, 2000, 23),
+        "ellipsis": ...,
+        "bytearrray": bytearray(b"xcvx<cv\0\0"),
+        "memoryview": memoryview(b"xcvx<cv\0\0"),
+        "slice1": slice(2),
+        "slice2": slice(2, 2143),
+        "slice3": slice(2, 2132, 23)
+    }
+    for exact_python_numeric_types in (False, True):
+        do_roundtrip(pytree, exact_python_numeric_types, version="v1_2_0")
+
+
+def test_version_tag():
+    with tempfile.TemporaryFile() as fp:
+        save(fp, None)
+        with h5py.File(fp, 'r') as file:
+            assert file.attrs[JAXON_VERSION_GROUP_KEY] == __version__
+
+
 def test_warn_numpy_array_with_title():
     with pytest.warns(JaxonTypeWarning):
         x = np.array([(b'A', 9, 81.0), (b'B', 3, 27.0)],
             dtype=[(('sd', 'd'), 'V10'), ('b', 'i4'), ('g', 'f4')])
         with tempfile.TemporaryFile() as fp:
             save(fp, x)
+
+
+def test_raise_group_not_found():
+    with tempfile.TemporaryFile() as fp:
+        save(fp, [1])
+        with h5py.File(fp, 'w') as file:
+            del file[JAXON_ROOT_GROUP_KEY]  # delete JAXON_ROOT dataset of the list
+        with pytest.raises(JaxonFormatError):
+            load(fp)
+
+
+def test_raise_root_attrib_not_found():
+    with tempfile.TemporaryFile() as fp:
+        save(fp, 1)
+        with h5py.File(fp, 'w') as file:
+            del file.attrs[JAXON_ROOT_GROUP_KEY]  # delete JAXON_ROOT attribute
+        with pytest.raises(JaxonFormatError):
+            print(load(fp))
 
 
 def test_raise_numpy_array_with_unsupported_dtype():
