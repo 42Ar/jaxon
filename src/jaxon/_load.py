@@ -16,6 +16,10 @@
 
 """
 This module handles HDF5 reading and pytree reconstruction.
+
+Author
+------
+Frank Hermann
 """
 
 

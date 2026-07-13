@@ -16,6 +16,10 @@
 
 """
 Pytree-to-atom conversion and HDF5 writing (save side).
+
+Author
+------
+Frank Hermann
 """
 
 

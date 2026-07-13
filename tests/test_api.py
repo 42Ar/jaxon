@@ -1,3 +1,19 @@
+# Copyright (C) 2026  Frank Hermann
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
 """
 tests.py
 
@@ -22,8 +38,8 @@ import h5py
 from numpy.random import default_rng, SeedSequence
 from jaxon import load, save, CircularPyTreeError, JaxonNotLoaded, PyTree, \
     JaxonFormatWarning, has_common_prefix, JAXON_PY_NUMERIC_TYPES, JAXON_PY_CONTAINER_TYPES, \
-    JaxonTypeWarning, JaxonTypeError, JAXON_NUMPY_NUMERIC_TYPES, __version__
-from jaxon._common import JAXON_ROOT_GROUP_KEY, JAXON_VERSION_GROUP_KEY, JaxonFormatError
+    JaxonTypeWarning, JaxonTypeError, JAXON_NUMPY_NUMERIC_TYPES, __version__, \
+    JAXON_ROOT_GROUP_KEY, JAXON_VERSION_GROUP_KEY, JaxonFormatError
 from .testing.classes import CustomDataclass, ObjectForDill, CustomTypeReturnDict, \
     CustomTypeReturnTuple
 from .testing.data import TEST_JAXON_ATOMIC, TEST_NUMPY_ARRAY_VALUES, TEST_JAX_ARRAY_DTYPES, \
@@ -371,7 +387,7 @@ def test_version_tag():
     with tempfile.TemporaryFile() as fp:
         save(fp, None)
         with h5py.File(fp, 'r') as file:
-            assert file.attrs[JAXON_VERSION_GROUP_KEY] == __version__
+            assert file.attrs[JAXON_VERSION_GROUP_KEY].decode("utf-8") == __version__
 
 
 def test_warn_numpy_array_with_title():

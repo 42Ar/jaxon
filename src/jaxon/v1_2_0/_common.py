@@ -17,6 +17,10 @@
 """
 Constants, type aliases, exception classes, internal data classes, and small
 utility functions shared by both the save and load modules.
+
+Author
+------
+Frank Hermann
 """
 
 

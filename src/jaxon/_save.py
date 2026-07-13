@@ -17,6 +17,10 @@
 """
 This module handles marshaling of a pytree to an intermediate
 representation and storing it into the HDF5 file.
+
+Author
+------
+Frank Hermann
 """
 
 
@@ -174,7 +178,7 @@ def check_numpy_array_dtype(dtype: np.dtype, root_dtype: np.dtype, debug_path: s
         check_numpy_array_dtype(dtype_field[0], root_dtype, debug_path)
         if len(dtype_field) > 2:
             warnings.warn(f"A field of dtype {root_dtype!r} of the numpy array at "
-                          f"{debug_path!r} has a filed name set which is unsupported by "
+                          f"{debug_path!r} has a field name set which is unsupported by "
                           "jaxon. It will not be stored in the HDF5 file.", JaxonTypeWarning)
 
 
@@ -331,11 +335,11 @@ def to_atom(pytree: PyTree,
     return atom
 
 
-def store_str_in_attrib(group: h5py.Group, attrib_key_with_th: str, s: str) -> None:
-    assert len(s) > 0, "string should not have length 0"
-    encoded = s.encode('utf-8')
+def store_str_in_attrib(group: h5py.Group, attrib_key: str, value: str) -> None:
+    assert len(value) > 0, "string should not have length 0"
+    encoded = value.encode('utf-8')
     dt = h5py.string_dtype(encoding='utf-8', length=len(encoded))
-    group.attrs.create(attrib_key_with_th, data=np.bytes_(encoded), dtype=dt)
+    group.attrs.create(attrib_key, data=np.bytes_(encoded), dtype=dt)
 
 
 def store_atom(group: h5py.Group, atom: JaxonAtom, attrib_name: str, group_path: str) -> None:
@@ -498,5 +502,5 @@ def save(path_or_file, pytree: PyTree,
         path_or_file.seek(0)
         path_or_file.truncate()
     with h5py.File(path_or_file, 'w', track_order=True) as file:
-        file.attrs[JAXON_VERSION_GROUP_KEY] = version('jaxon')
+        store_str_in_attrib(file, JAXON_VERSION_GROUP_KEY, version('jaxon'))
         store_atom(file, root_atom, JAXON_ROOT_GROUP_KEY, "/")

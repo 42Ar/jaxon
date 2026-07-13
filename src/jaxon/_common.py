@@ -17,6 +17,10 @@
 """
 Constants, type aliases, exception classes, internal data classes, and small
 utility functions.
+
+Author
+------
+Frank Hermann
 """
 
 

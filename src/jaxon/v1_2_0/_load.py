@@ -16,6 +16,10 @@
 
 """
 HDF5 reading and atom-to-pytree reconstruction (load side).
+
+Author
+------
+Frank Hermann
 """
 
 
