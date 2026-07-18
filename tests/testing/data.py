@@ -97,8 +97,11 @@ TEST_NUMPY_ARRAY_VALUES = TEST_NUMPY_NUMERIC | {
     np.bytes_: tuple(np.bytes_(x) for x in TEST_BYTES if len(x) > 0 and b"\0" not in x),
     np.void: tuple(np.void(x) for x in TEST_BYTES if len(x) > 0),
 }
+# currently excluded jax types, as newer versions of jax crash on creating arrays of them
+EXCLUDE_JAX_DTYPES = ("float6_e2m3fn", "float6_e3m2fn")  
 TEST_JAX_ARRAY_DTYPES = tuple(dtype for dtype in jax_array_types
-                              if (dtype.__name__ not in ("ndarray", "TypedNdArray")
+                              if (dtype.__name__ not in ("ndarray", "TypedNdArray",
+                                                         *EXCLUDE_JAX_DTYPES)
                                   and is_supported_jax_dtype(dtype)))
 # Sort available dtypes to have a deterministic order (at least on this platform).
 # This important to have deterministic fuzzing.
