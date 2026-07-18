@@ -15,8 +15,7 @@
 
 
 """
-Constants, type aliases, exception classes, internal data classes, and small
-utility functions.
+Constants, type aliases, exception classes, and small utility functions.
 
 Author
 ------
@@ -71,7 +70,6 @@ JAXON_ATOMIC_TYPES = JAXON_NUMPY_ATOMIC_TYPES | JAXON_PY_ATOMIC_TYPES
 JaxonPyContainer = list | tuple | dict | set | frozenset
 JAXON_PY_CONTAINER_TYPES = {list, tuple, dict, set, frozenset}
 
-
 # all supported builtin types (these are all supported types without custom types)
 JaxonBuiltin = JaxonAtomic | JaxonPyContainer | np.ndarray | jax.Array
 
@@ -83,11 +81,13 @@ Marshaler = Callable[[PyTree], tuple[str, PyTree] | None]
 Unmarshaler = Callable[[str, PyTree], PyTree | None]
 LoadFilter = Callable[[list[PathElement]], bool]
 JAXON_JAX_ARRAY_TYPE = type(jax.numpy.array([]))  # get the type of a jax array
-                                                   # (in a version-independent way)
+                                                  # (in a version-independent way)
+
 
 # string shorter than this can never be referenced (copies are stored)
 # string of equal or greater length are stored only once
 MIN_LENGTH_FOR_REFERENCEABLE_STR = 15
+
 
 # table to convert jaxon to numpy type
 JAXON_JAX_TO_NUMPY_TYPE = {

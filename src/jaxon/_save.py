@@ -446,25 +446,25 @@ def save(path_or_file, pytree: PyTree,
         and stored as the corresponding HDF5 binary type. If the file is loaded, the types will
         be the numpy (not python) types.
     downcast_to_base_types : Iterable[type]
-        If a superclass of a supported base type is encountered in the pytree and is contained in
-        this Iterable, it is converted to and stored as the supported base type. This means that
-        it is also reconstructed as this base type when the file is loaded.
+        If a superclass of a supported base type is encountered in the pytree and the encountered
+        type is contained in this Iterable, it is converted to and stored as the supported base type.
+        This means that it is also reconstructed as this base type when the file is loaded.
     py_to_np_types : Iterable[JaxonPyNumeric]
         Apply the behavior of `exact_python_numeric_types` only to the python types in the given
         Iterable. If not `None`, `exact_python_numeric_types` will be ignored.
     allow_dill : bool, default=False
-        Whether to allow `dill` for serializing unsupported objects.
+        Whether to allow `dill` as a fallback for serializing unsupported objects.
     dill_kwargs : dict or None, optional
         Keyword arguments passed to `dill.dumps` if `allow_dill` is `True`.
     custom_marshalers : Iterable[Marshaler]
-        If provided, each custom node and leaf in the pytree (that is not a builtin type) is passed
-        to the Callables in the order they are provided. Each Callable shall return either `None`
-        indicating that the Callable cannot marshal the type or a `tuple[str, PyTree]` representing
-        a type hint (used for unmarshaling) and the corresponding marshaled object. It must either
-        be another custom object or (typically) a jaxon builtin type such as a standard python
-        container. If all Callables return `None` the object is marshaled using the `to_jaxon`
-        interface (if available) or the default implementation for dataclasses. It is is assumed
-        that the object returned by the marshaler is nowhere referenced in the pytree.
+        If provided, each custom node and leaf in the pytree (that has no jaxon builtin support) is
+        passed to the Callables in the order they are provided. Each Callable shall return either
+        `None` indicating that the Callable cannot marshal the type or a `tuple[str, PyTree]`
+        representing a type hint (used for unmarshaling) and the corresponding marshaled object. It
+        must either be another custom object or (typically) a jaxon builtin type such as a standard
+        python container. If all Callables return `None` the object is marshaled using the
+        `to_jaxon` interface (if available) or the default implementation for dataclasses. It is
+        assumed that the object returned by the marshaler is nowhere referenced in the pytree.
 
     Raises
     ------
