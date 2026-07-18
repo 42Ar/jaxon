@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jaxon"
-version = "1.2.0"
+version = "2.0.0"
 description = "HDF5 serialization for JAX and NumPy pytrees with full type fidelity and reference identity"
 authors = [{ name = "Frank Hermann", email = "frank.c.hermann@googlemail.com" }]
 readme = "README.md"
