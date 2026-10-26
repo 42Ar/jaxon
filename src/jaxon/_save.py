@@ -25,7 +25,7 @@ Frank Hermann
 
 
 from importlib.metadata import version
-from typing import Iterable, assert_never, Union
+from typing import Iterable, Union
 import warnings
 from dataclasses import dataclass, is_dataclass, fields, field
 import numpy as np
@@ -160,7 +160,7 @@ def convert_py_numeric_to_numpy(pytree: JaxonPyNumeric) -> \
         return np.double(pytree)
     if isinstance(pytree, complex):
         return np.cdouble(pytree)
-    assert_never(pytree)  # pragma: no cover
+    raise AssertionError(f"Expected code to be unreachable, but got: {pytree!r}")  # pragma: no cover
 
 
 def escape_str_terminator(string: str) -> str:
