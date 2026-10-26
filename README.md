@@ -17,7 +17,7 @@ compatible with packages that use Python dataclasses and
 Jaxon intentionally has a narrow scope — saving and loading pytrees is all it does.
 The `save` and `load` API is stable.
 
-**Requires Python ≥ 3.12.**
+**Requires Python ≥ 3.10.**
 
 
 ## Installation
