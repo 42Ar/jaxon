@@ -40,6 +40,7 @@ from ._common import (
     CircularPyTreeError, get_qualified_name, JAXON_JAX_TO_NUMPY_TYPE, JaxonNumpyAtomic,
     MIN_LENGTH_FOR_REFERENCEABLE_STR, JaxonTypeWarning, JaxonTypeError
 )
+from ._load import get_class
 
 
 @dataclass
@@ -114,6 +115,11 @@ def dataclass_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
     if not is_dataclass(pytree):
         return None
     th = get_qualified_name(pytree)
+    try:
+        get_class(th)
+    except (ImportError, AttributeError) as e:
+        raise JaxonTypeError(f"dataclass {th!r} cannot be found under its qualified "
+                             "name, so it could not be loaded again") from e
     res = {field.name: getattr(pytree, field.name) for field in fields(pytree)}
     return f"dclass[{th}]", res
 

@@ -25,7 +25,7 @@ Frank Hermann
 """
 
 import importlib
-from dataclasses import make_dataclass, fields, field
+from dataclasses import dataclass, make_dataclass, fields, field
 from pathlib import Path
 import sys
 import tempfile
@@ -442,6 +442,15 @@ def test_raise_unsupported_type():
             pass
         with tempfile.TemporaryFile() as fp:
             save(fp, Custom())
+
+
+def test_raise_dataclass_not_found_under_qualified_name():
+    @dataclass
+    class LocalDataclass:
+        a: int
+    with pytest.raises(JaxonTypeError):
+        with tempfile.TemporaryFile() as fp:
+            save(fp, LocalDataclass(1))
 
 
 def test_raise_and_warn_missing_fields():
