@@ -25,7 +25,6 @@ Frank Hermann
 """
 
 import importlib
-from typing import override
 from dataclasses import make_dataclass, fields, field
 from pathlib import Path
 import sys
@@ -252,7 +251,6 @@ def test_custom_marshaler():
                 self.a = a
                 self.b = b
 
-            @override
             def children(self) -> tuple:
                 return (self.a, self.b)
 

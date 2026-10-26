@@ -25,7 +25,7 @@ Frank Hermann
 """
 
 
-from typing import override, Any
+from typing import Any
 from dataclasses import dataclass
 from .tree_equal import PyTreeTestNode, DillObject
 
@@ -43,7 +43,6 @@ class ObjectForDill(PyTreeTestNode, DillObject):
     def __eq__(self, other) -> bool:
         return isinstance(other, ObjectForDill) and self.a == other.a
 
-    @override
     def children(self) -> tuple:
         return (self.a,)
 
@@ -67,7 +66,6 @@ class CustomTypeReturnDict(PyTreeTestNode):
     def __eq__(self, other) -> bool:
         return isinstance(other, CustomTypeReturnDict) and self.a == other.a
 
-    @override
     def children(self) -> tuple:
         return (self.a,)
 
@@ -91,7 +89,6 @@ class CustomTypeReturnTuple(PyTreeTestNode):
     def __eq__(self, other) -> bool:
         return isinstance(other, CustomTypeReturnTuple) and self.a == other.a
 
-    @override
     def children(self) -> tuple:
         return (self.a,)
 
@@ -104,6 +101,5 @@ class CustomDataclass(PyTreeTestNode):
     def __hash__(self):
         return hash((self.a, self.b))
 
-    @override
     def children(self) -> tuple:
         return (self.a, self.b)
