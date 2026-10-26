@@ -25,7 +25,7 @@ Frank Hermann
 
 
 from importlib.metadata import version
-from typing import Iterable, assert_never, Union
+from typing import Iterable, Union
 import warnings
 from dataclasses import dataclass, is_dataclass, fields, field
 import numpy as np
@@ -40,6 +40,7 @@ from ._common import (
     CircularPyTreeError, get_qualified_name, JAXON_JAX_TO_NUMPY_TYPE, JaxonNumpyAtomic,
     MIN_LENGTH_FOR_REFERENCEABLE_STR, JaxonTypeWarning, JaxonTypeError
 )
+from ._load import get_class
 
 
 @dataclass
@@ -114,6 +115,11 @@ def dataclass_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
     if not is_dataclass(pytree):
         return None
     th = get_qualified_name(pytree)
+    try:
+        get_class(th)
+    except (ImportError, AttributeError) as e:
+        raise JaxonTypeError(f"dataclass {th!r} cannot be found under its qualified "
+                             "name, so it could not be loaded again") from e
     res = {field.name: getattr(pytree, field.name) for field in fields(pytree)}
     return f"dclass[{th}]", res
 
@@ -160,7 +166,7 @@ def convert_py_numeric_to_numpy(pytree: JaxonPyNumeric) -> \
         return np.double(pytree)
     if isinstance(pytree, complex):
         return np.cdouble(pytree)
-    assert_never(pytree)  # pragma: no cover
+    raise AssertionError(f"Expected code to be unreachable, but got: {pytree!r}")  # pragma: no cover
 
 
 def escape_str_terminator(string: str) -> str:

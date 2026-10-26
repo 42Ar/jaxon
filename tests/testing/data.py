@@ -98,7 +98,7 @@ TEST_NUMPY_ARRAY_VALUES = TEST_NUMPY_NUMERIC | {
     np.void: tuple(np.void(x) for x in TEST_BYTES if len(x) > 0),
 }
 # currently excluded jax types, as newer versions of jax crash on creating arrays of them
-EXCLUDE_JAX_DTYPES = ("float6_e2m3fn", "float6_e3m2fn")  
+EXCLUDE_JAX_DTYPES = ("float6_e2m3fn", "float6_e3m2fn", "int1", "unint1")  
 TEST_JAX_ARRAY_DTYPES = tuple(dtype for dtype in jax_array_types
                               if (dtype.__name__ not in ("ndarray", "TypedNdArray",
                                                          *EXCLUDE_JAX_DTYPES)

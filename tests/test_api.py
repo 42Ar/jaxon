@@ -25,8 +25,7 @@ Frank Hermann
 """
 
 import importlib
-from typing import override
-from dataclasses import make_dataclass, fields, field
+from dataclasses import dataclass, make_dataclass, fields, field
 from pathlib import Path
 import sys
 import tempfile
@@ -252,7 +251,6 @@ def test_custom_marshaler():
                 self.a = a
                 self.b = b
 
-            @override
             def children(self) -> tuple:
                 return (self.a, self.b)
 
@@ -446,6 +444,15 @@ def test_raise_unsupported_type():
             save(fp, Custom())
 
 
+def test_raise_dataclass_not_found_under_qualified_name():
+    @dataclass
+    class LocalDataclass:
+        a: int
+    with pytest.raises(JaxonTypeError):
+        with tempfile.TemporaryFile() as fp:
+            save(fp, LocalDataclass(1))
+
+
 def test_raise_and_warn_missing_fields():
     def run_test_missing_fields(**kwargs):
         with tempfile.TemporaryFile() as fp:
@@ -454,6 +461,7 @@ def test_raise_and_warn_missing_fields():
                 [("a", int), ("b", float)],
             )
             module = sys.modules[__name__]
+            Dynamic.__module__ = __name__  # before Python 3.12, make_dataclass sets this to "types"
             setattr(module, "Dynamic", Dynamic)
             pytree = Dynamic(a=123, b=2.0)
             assert len(fields(pytree)) == 2
@@ -462,6 +470,7 @@ def test_raise_and_warn_missing_fields():
                 "Dynamic",
                 [("a", int)],
             )
+            Dynamic.__module__ = __name__  # before Python 3.12, make_dataclass sets this to "types"
             setattr(module, "Dynamic", Dynamic)
             loaded_pytree = load(fp, **kwargs)
             assert loaded_pytree.a == pytree.a
@@ -481,6 +490,7 @@ def test_raise_and_warn_unknown_fields():
                 [("existing", int)],
             )
             module = sys.modules[__name__]
+            Dynamic.__module__ = __name__  # before Python 3.12, make_dataclass sets this to "types"
             setattr(module, "Dynamic", Dynamic)
             pytree = Dynamic(existing=123)
             assert len(fields(pytree)) == 1
@@ -494,6 +504,7 @@ def test_raise_and_warn_unknown_fields():
                  ("missing_default_factory_no_init",
                   float, field(default_factory=lambda: 5, init=False))],
             )
+            Dynamic.__module__ = __name__  # before Python 3.12, make_dataclass sets this to "types"
             setattr(module, "Dynamic", Dynamic)
             loaded_pytree = load(fp, **kwargs)
             assert loaded_pytree.existing == 123
