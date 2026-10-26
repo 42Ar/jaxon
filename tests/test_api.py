@@ -461,6 +461,7 @@ def test_raise_and_warn_missing_fields():
                 [("a", int), ("b", float)],
             )
             module = sys.modules[__name__]
+            Dynamic.__module__ = __name__  # before Python 3.12, make_dataclass sets this to "types"
             setattr(module, "Dynamic", Dynamic)
             pytree = Dynamic(a=123, b=2.0)
             assert len(fields(pytree)) == 2
@@ -469,6 +470,7 @@ def test_raise_and_warn_missing_fields():
                 "Dynamic",
                 [("a", int)],
             )
+            Dynamic.__module__ = __name__  # before Python 3.12, make_dataclass sets this to "types"
             setattr(module, "Dynamic", Dynamic)
             loaded_pytree = load(fp, **kwargs)
             assert loaded_pytree.a == pytree.a
@@ -488,6 +490,7 @@ def test_raise_and_warn_unknown_fields():
                 [("existing", int)],
             )
             module = sys.modules[__name__]
+            Dynamic.__module__ = __name__  # before Python 3.12, make_dataclass sets this to "types"
             setattr(module, "Dynamic", Dynamic)
             pytree = Dynamic(existing=123)
             assert len(fields(pytree)) == 1
@@ -501,6 +504,7 @@ def test_raise_and_warn_unknown_fields():
                  ("missing_default_factory_no_init",
                   float, field(default_factory=lambda: 5, init=False))],
             )
+            Dynamic.__module__ = __name__  # before Python 3.12, make_dataclass sets this to "types"
             setattr(module, "Dynamic", Dynamic)
             loaded_pytree = load(fp, **kwargs)
             assert loaded_pytree.existing == 123
