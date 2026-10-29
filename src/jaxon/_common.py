@@ -24,6 +24,7 @@ Frank Hermann
 
 
 from types import EllipsisType
+import importlib
 from typing import Any, Callable, Iterable
 import numpy as np
 import jax
@@ -195,3 +196,28 @@ def get_qualified_name(obj) -> str:
     """The returned name fully identifies the class of the object so that a new object can be
     instantiated later during loading (see `_create_instance`)."""
     return type(obj).__module__ + "." + type(obj).__qualname__
+
+def get_class(qualified_name: str):
+    """Get the class identified by `qualified_name` that was returned by `get_qualified_name`."""
+    parts = qualified_name.split(".")
+    module_path = ".".join(parts[:-1])
+    class_name = parts[-1]
+    module = importlib.import_module(module_path)
+    return getattr(module, class_name)
+
+
+def split_type_hint_and_type_arg(type_info: str) -> tuple[str, str | None]:
+    if not type_info:
+        return "", None
+    if type_info[-1] == "]":
+        if "]" in type_info[:-1]:
+            raise JaxonFormatError("invalid type argument syntax (multiple occurrence of ']')")
+        res = type_info[:-1].split("[")
+        if len(res) > 2:
+            raise JaxonFormatError("invalid type argument syntax (multiple occurrence of '[')")
+        if len(res) < 2:
+            raise JaxonFormatError("invalid type argument syntax (found ']', but no matching '[')")
+        return res[0].rstrip(), res[1].lstrip()
+    if "[" in type_info:
+        raise JaxonFormatError("invalid type argument syntax (found '[', but no matching ']')")
+    return type_info, None

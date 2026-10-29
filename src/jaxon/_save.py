@@ -27,20 +27,19 @@ Frank Hermann
 from importlib.metadata import version
 from typing import Iterable, Union
 import warnings
-from dataclasses import dataclass, is_dataclass, fields, field
+from dataclasses import dataclass, field
 import numpy as np
 import h5py
-import dill
 from ._common import (
     JAXON_JAX_ARRAY, JAXON_NUMPY_ARRAY, JAXON_NUMPY_ARRAY_TYPES, JAXON_NUMPY_STR,
     JAXON_NUMPY_BYTES, JAXON_NUMPY_VOID, JAXON_PY_CONTAINER_TYPES, PyTree, Marshaler,
     JAXON_NUMPY_ATOMIC_TYPES, JaxonPyNumeric, JAXON_PY_NUMERIC_TYPES, JAXON_NUMPY_NUMERIC_TYPES,
     JAXON_NUMPY_NUMERIC_DTYPES, JAXON_JAX_ARRAY_TYPE, JAXON_NONE, JAXON_ELLIPSIS,
     JAXON_ROOT_GROUP_KEY, JAXON_DICT_KEY, JAXON_DICT_VALUE, JAXON_VERSION_GROUP_KEY,
-    CircularPyTreeError, get_qualified_name, JAXON_JAX_TO_NUMPY_TYPE, JaxonNumpyAtomic,
+    CircularPyTreeError, JAXON_JAX_TO_NUMPY_TYPE, JaxonNumpyAtomic,
     MIN_LENGTH_FOR_REFERENCEABLE_STR, JaxonTypeWarning, JaxonTypeError
 )
-from ._load import get_class
+from ._marshalers import dataclass_marshaler, jaxon_interface_marshaler, supply_dill_marshaler
 
 
 @dataclass
@@ -109,31 +108,6 @@ def key_to_debugstring(dict_key: PyTree, i: int) -> str:
     if isinstance(dict_key, (str, int, float, bool, complex)):
         return repr(dict_key)
     return f"{i}"
-
-
-def dataclass_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
-    if not is_dataclass(pytree):
-        return None
-    th = get_qualified_name(pytree)
-    try:
-        get_class(th)
-    except (ImportError, AttributeError) as e:
-        raise JaxonTypeError(f"dataclass {th!r} cannot be found under its qualified "
-                             "name, so it could not be loaded again") from e
-    res = {field.name: getattr(pytree, field.name) for field in fields(pytree)}
-    return f"dclass[{th}]", res
-
-
-def jaxon_interface_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
-    if hasattr(pytree, "to_jaxon"):
-        return f"jaxon[{get_qualified_name(pytree)}]", pytree.to_jaxon()
-    return None
-
-
-def supply_dill_marshaler(dill_kwargs) -> Marshaler:
-    def dill_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
-        return "dill", dill.dumps(pytree, **dill_kwargs)
-    return dill_marshaler
 
 
 def base_type(obj: PyTree, types: Iterable[type],
