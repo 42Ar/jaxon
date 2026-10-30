@@ -37,7 +37,8 @@ from ._common import (
     JaxonMissing, JAXON_VERSION_GROUP_KEY, split_type_hint_and_type_arg
 )
 from ._unmarshalers import (
-    supply_dataclass_unmarshaler, jaxon_interface_unmarshaler, supply_dill_unmarshaler
+    supply_dataclass_unmarshaler, jaxon_interface_unmarshaler, supply_namedtuple_unmarshaler,
+    supply_dill_unmarshaler
 )
 
 
@@ -506,12 +507,12 @@ def load(path_or_file,
         that the Callable cannot unmarshal the type or a `PyTree` representing the
         successfully unmarshaled object. The first result that is not `None` is used.
         If all Callables return `None`, the object is unmarshaled using the `from_jaxon`
-        interface (if available) or the default implementation for dataclasses.
+        interface (if available) or one of the built-in unmarshalers (see README).
     allow_missing_fields: bool, default=False
         Do not raise an error if fields are present in the HDF5 file which do not have a
-        corresponding definition in the instantiated dataclass.
+        corresponding definition in the instantiated class.
     allow_unknown_fields: bool, default=False
-        Do not raise an error if fields are defined in a dataclass but are not found in
+        Do not raise an error if fields are defined in the class but are not found in
         the HDF5 file. The fields will be initialized using their default_factory or default
         value if available. Otherwise, they will be initialized with an instance of
         `JaxonNotLoaded`.
@@ -520,8 +521,8 @@ def load(path_or_file,
         the pytree, it is called with a list of items that represent the path in the pytree as
         an argument and shall return `True` if the node or leaf shall be loaded and `False`
         otherwise. For dictionaries the path element is the loaded dict key object, for lists
-        and set like objects it is the index of the element (of type `int`) and for
-        dataclasses it is the field name. If the pytree node or leaf is not loaded, it is
+        and set like objects it is the index of the element (of type `int`) and for types stored by
+        field name (e.g. dataclasses) it is the field name. If the pytree node or leaf is not loaded, it is
         replaced with an instance of `JaxonNotLoaded`. Note: dict keys are always loaded
         regardless of the filter — without them the dict cannot be reconstructed.
     """
@@ -535,6 +536,7 @@ def load(path_or_file,
     unmarshalers += [
         jaxon_interface_unmarshaler,
         supply_dataclass_unmarshaler(allow_missing_fields, allow_unknown_fields),
+        supply_namedtuple_unmarshaler(allow_missing_fields, allow_unknown_fields),
         supply_dill_unmarshaler(allow_dill, dill_kwargs)
     ]
     with h5py.File(path_or_file, 'r') as file:

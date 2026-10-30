@@ -23,8 +23,46 @@ import warnings
 import dill
 from ._common import (
     JaxonFormatError, JaxonFormatWarning, JaxonNotLoaded, PyTree, Unmarshaler, 
-    get_class, get_qualified_name, split_type_hint_and_type_arg
+    get_class, get_qualified_name, is_namedtuple_class, split_type_hint_and_type_arg
 )
+
+
+def check_fields(
+    qualified_name: str,
+    field_names: set[str],
+    available_field_names: set[str],
+    allow_missing_fields: bool,
+    allow_unknown_fields: bool,
+    unknown_fields_hint: str,
+) -> None:
+    """Raise or warn if the fields stored in the HDF5 file do not match the class definition."""
+    missing_fields = available_field_names - field_names
+    if missing_fields:
+        message = (
+            f"The following fields in {qualified_name!r} are present in "
+            "the HDF5 file but are missing in the class "
+            f"definition: {', '.join(map(repr, missing_fields))}"
+        )
+        if allow_missing_fields:
+            warnings.warn(message, JaxonFormatWarning)
+        else:
+            raise JaxonFormatError(
+                message + ". To omit this error run with allow_missing_fields=True."
+            )
+    unknown_fields = field_names - available_field_names
+    if unknown_fields:
+        message = (
+            f"the following fields in {qualified_name!r} are present in "
+            "the class definition but are missing in the HDF5 "
+            f"file: {', '.join(map(repr, unknown_fields))}"
+        )
+        if allow_unknown_fields:
+            warnings.warn(message, JaxonFormatWarning)
+        else:
+            raise JaxonFormatError(
+                message + ". To omit this error run with allow_unknown_fields=True. "
+                + unknown_fields_hint
+            )
 
 
 def supply_dataclass_unmarshaler(
@@ -50,35 +88,16 @@ def supply_dataclass_unmarshaler(
         fields = dataclasses.fields(instance)
         field_names = {f.name for f in fields}
         available_field_names = dict_.keys()
-        missing_fields = available_field_names - field_names
-        if missing_fields:
-            message = (
-                f"The following fields in {get_qualified_name(instance)!r} are present in "
-                "the HDF5 file but are missing in the class "
-                f"definition: {', '.join(map(repr, missing_fields))}"
-            )
-            if allow_missing_fields:
-                warnings.warn(message, JaxonFormatWarning)
-            else:
-                raise JaxonFormatError(
-                    message + ". To omit this error run with allow_missing_fields=True."
-                )
-        unknown_fields = field_names - available_field_names
-        if unknown_fields:
-            message = (
-                f"the following fields in {get_qualified_name(instance)!r} are present in "
-                "the class definition but are missing in the HDF5 "
-                f"file: {', '.join(map(repr, unknown_fields))}"
-            )
-            if allow_unknown_fields:
-                warnings.warn(message, JaxonFormatWarning)
-            else:
-                raise JaxonFormatError(
-                    message + ". To omit this error run with "
-                    "allow_unknown_fields=True. Missing fields will be initialized using the "
-                    "default_factory or default value. If both are missing JaxonNotLoaded() "
-                    "will be used as a placeholder. The __post_init__() logic is never triggered."
-                )
+        check_fields(
+            get_qualified_name(instance),
+            set(field_names),
+            set(available_field_names),
+            allow_missing_fields,
+            allow_unknown_fields,
+            "Missing fields will be initialized using the default_factory or default value. "
+            "If both are missing JaxonNotLoaded() will be used as a placeholder. "
+            "The __post_init__() logic is never triggered.",
+        )
         for field in fields:
             try:
                 val = dict_[field.name]
@@ -94,6 +113,50 @@ def supply_dataclass_unmarshaler(
         return instance
 
     return dataclass_unmarshaler
+
+
+def supply_namedtuple_unmarshaler(
+    allow_missing_fields: bool, allow_unknown_fields: bool
+) -> Unmarshaler:
+    """Create an unmarshaler for named tuples."""
+
+    def namedtuple_unmarshaler(type_info: str, dict_: PyTree) -> PyTree | None:
+        try:
+            th, qualified_name = split_type_hint_and_type_arg(type_info)
+        except JaxonFormatError:
+            return None
+        if th != "namedtuple":
+            return None
+        if qualified_name is None:
+            raise JaxonFormatError("expected type argument for named tuple")
+        if type(dict_) is not dict:
+            raise JaxonFormatError("expected dict for marshaled named tuple")
+        cls_ = get_class(qualified_name)
+        if not is_namedtuple_class(cls_):
+            raise JaxonFormatError(f"expected that {qualified_name!r} is a named tuple")
+        field_names = set(cls_._fields)
+        available_field_names = set(dict_.keys())
+        check_fields(
+            qualified_name,
+            field_names,
+            available_field_names,
+            allow_missing_fields,
+            allow_unknown_fields,
+            "Missing fields will be initialized using their default value. If there is "
+            "none, JaxonNotLoaded() will be used as a placeholder.",
+        )
+        defaults = cls_._field_defaults
+        values = []
+        for name in cls_._fields:
+            try:
+                val = dict_[name]
+            except KeyError:
+                val = defaults.get(name, JaxonNotLoaded())
+            values.append(val)
+        # _make bypasses a custom __new__, like the dataclass unmarshaler bypasses __init__
+        return cls_._make(values)
+
+    return namedtuple_unmarshaler
 
 
 def jaxon_interface_unmarshaler(type_info: str, marshaled: PyTree) -> PyTree | None:

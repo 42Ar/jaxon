@@ -39,7 +39,9 @@ from ._common import (
     CircularPyTreeError, JAXON_JAX_TO_NUMPY_TYPE, JaxonNumpyAtomic,
     MIN_LENGTH_FOR_REFERENCEABLE_STR, JaxonTypeWarning, JaxonTypeError
 )
-from ._marshalers import dataclass_marshaler, jaxon_interface_marshaler, supply_dill_marshaler
+from ._marshalers import (
+    dataclass_marshaler, jaxon_interface_marshaler, namedtuple_marshaler, supply_dill_marshaler
+)
 
 
 @dataclass
@@ -443,7 +445,7 @@ def save(path_or_file, pytree: PyTree,
         representing a type hint (used for unmarshaling) and the corresponding marshaled object. It
         must either be another custom object or (typically) a jaxon builtin type such as a standard
         python container. If all Callables return `None` the object is marshaled using the
-        `to_jaxon` interface (if available) or the default implementation for dataclasses. It is
+        `to_jaxon` interface (if available) or one of the built-in marshalers (see README). It is
         assumed that the object returned by the marshaler is nowhere referenced in the pytree.
 
     Raises
@@ -470,7 +472,7 @@ def save(path_or_file, pytree: PyTree,
     if dill_kwargs is None:
         dill_kwargs = {}
     marshalers = list(custom_marshalers)
-    marshalers += [jaxon_interface_marshaler, dataclass_marshaler]
+    marshalers += [jaxon_interface_marshaler, dataclass_marshaler, namedtuple_marshaler]
     if allow_dill:
         marshalers.append(supply_dill_marshaler(dill_kwargs))
     root_atom = to_atom(pytree, downcast_to_base_types, py_to_np_types,

@@ -25,7 +25,7 @@ Frank Hermann
 """
 
 
-from typing import Any
+from typing import Any, NamedTuple
 from dataclasses import dataclass
 from .tree_equal import PyTreeTestNode, DillObject
 
@@ -103,3 +103,8 @@ class CustomDataclass(PyTreeTestNode):
 
     def children(self) -> tuple:
         return (self.a, self.b)
+
+
+class CustomNamedTuple(NamedTuple):
+    a: Any
+    b: Any = 1

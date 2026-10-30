@@ -221,3 +221,9 @@ def split_type_hint_and_type_arg(type_info: str) -> tuple[str, str | None]:
     if "[" in type_info:
         raise JaxonFormatError("invalid type argument syntax (found '[', but no matching ']')")
     return type_info, None
+
+
+def is_namedtuple_class(cls_) -> bool:
+    """Check if `cls_` is a named tuple class (`typing.NamedTuple` or `collections.namedtuple`)."""
+    return (isinstance(cls_, type) and issubclass(cls_, tuple)
+        and all(hasattr(cls_, attr) for attr in ("_fields", "_make", "_asdict")))

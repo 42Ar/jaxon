@@ -20,22 +20,37 @@ Built in marshalers which convert custom objects into pytrees of supported types
 
 from dataclasses import fields, is_dataclass
 import dill
-from ._common import JaxonTypeError, Marshaler, PyTree, get_class, get_qualified_name
+from ._common import Marshaler, PyTree, get_class, get_qualified_name, is_namedtuple_class
+
+
+def class_can_be_found(qualified_name: str) -> bool:
+    """Check if the class can be found under `qualified_name`, which is required to load it again.
+    This is not the case for classes defined inside functions, for example."""
+    try:
+        get_class(qualified_name)
+    except (ImportError, AttributeError):
+        return False
+    return True
 
 
 def dataclass_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
     if not is_dataclass(pytree):
         return None
     th = get_qualified_name(pytree)
-    try:
-        get_class(th)
-    except (ImportError, AttributeError) as e:
-        raise JaxonTypeError(
-            f"dataclass {th!r} cannot be found under its qualified "
-            "name, so it could not be loaded again"
-        ) from e
+    if not class_can_be_found(th):
+        return None  # pass to the next marshaler
     res = {field.name: getattr(pytree, field.name) for field in fields(pytree)}
     return f"dclass[{th}]", res
+
+
+def namedtuple_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
+    if not is_namedtuple_class(type(pytree)):
+        return None
+    th = get_qualified_name(pytree)
+    if not class_can_be_found(th):
+        return None  # pass to the next marshaler
+    res = pytree._asdict()
+    return f"namedtuple[{th}]", res
 
 
 def jaxon_interface_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:

@@ -25,6 +25,7 @@ Frank Hermann
 """
 
 import importlib
+from collections import namedtuple
 from dataclasses import dataclass, make_dataclass, fields, field
 from pathlib import Path
 import sys
@@ -40,7 +41,7 @@ from jaxon import load, save, CircularPyTreeError, JaxonNotLoaded, PyTree, \
     JaxonTypeWarning, JaxonTypeError, JAXON_NUMPY_NUMERIC_TYPES, __version__, \
     JAXON_ROOT_GROUP_KEY, JAXON_VERSION_GROUP_KEY, JaxonFormatError
 from .testing.classes import CustomDataclass, ObjectForDill, CustomTypeReturnDict, \
-    CustomTypeReturnTuple
+    CustomTypeReturnTuple, CustomNamedTuple
 from .testing.data import TEST_JAXON_ATOMIC, TEST_NUMPY_ARRAY_VALUES, TEST_JAX_ARRAY_DTYPES, \
     get_jax_array_values
 from .testing.tree_equal import assert_tree_equal, PyTreeTestNode
@@ -215,6 +216,15 @@ def test_custom_dataclass():
     run_roundtrip_test(pytree)
 
 
+def test_custom_namedtuple():
+    shared = CustomNamedTuple([1, 2])
+    pytree = {CustomNamedTuple(1): CustomNamedTuple(CustomNamedTuple(2), "a"),
+              "array": CustomNamedTuple(np.arange(3)),
+              "in_dataclass": CustomDataclass(CustomNamedTuple(1, CustomNamedTuple(3))),
+              "shared": [shared, shared]}
+    run_roundtrip_test(pytree)
+
+
 def test_reference_with_escape_symbols():
     a = []
     pytree = {"\\": a, "d": a}
@@ -287,6 +297,13 @@ def test_load_filter():
         assert_tree_equal(JaxonNotLoaded(), loaded)
         loaded = load(fp, load_filter=lambda path: has_common_prefix(path, ("b", 0)))
         assert_tree_equal({'a': JaxonNotLoaded(), 'b': [CustomDataclass(a={'a': 5}, b=3), JaxonNotLoaded()]}, loaded)
+
+
+def test_load_filter_namedtuple():
+    with tempfile.TemporaryFile() as fp:
+        save(fp, [CustomNamedTuple({"a": 5}, 3), "c"])
+        loaded = load(fp, load_filter=lambda path: has_common_prefix(path, (0, "b")))
+        assert_tree_equal([CustomNamedTuple(JaxonNotLoaded(), 3), JaxonNotLoaded()], loaded)
 
 
 def test_reference_recovery_explicitly():
@@ -444,13 +461,22 @@ def test_raise_unsupported_type():
             save(fp, Custom())
 
 
-def test_raise_dataclass_not_found_under_qualified_name():
+def test_dataclass_not_found_under_qualified_name_requires_dill():
     @dataclass
     class LocalDataclass:
         a: int
-    with pytest.raises(JaxonTypeError):
-        with tempfile.TemporaryFile() as fp:
-            save(fp, LocalDataclass(1))
+    with pytest.raises(JaxonTypeError, match="allow_dill"):
+        do_roundtrip(LocalDataclass(1))
+    loaded = do_roundtrip(LocalDataclass(1), allow_dill=True)
+    assert type(loaded).__qualname__ == LocalDataclass.__qualname__ and loaded.a == 1
+
+
+def test_namedtuple_not_found_under_qualified_name_requires_dill():
+    LocalNamedTuple = namedtuple("LocalNamedTuple", ["a"])
+    with pytest.raises(JaxonTypeError, match="allow_dill"):
+        do_roundtrip(LocalNamedTuple(1))
+    loaded = do_roundtrip(LocalNamedTuple(1), allow_dill=True)
+    assert type(loaded).__qualname__ == LocalNamedTuple.__qualname__ and loaded.a == 1
 
 
 def test_raise_and_warn_missing_fields():
@@ -512,6 +538,45 @@ def test_raise_and_warn_unknown_fields():
             assert loaded_pytree.missing_default == 2
             assert loaded_pytree.missing_default_factory == 3
             assert loaded_pytree.missing_default_factory_no_init == 5
+    with pytest.raises(JaxonFormatError):
+        run_test_unknown_fields(allow_unknown_fields=False)
+    with pytest.warns(JaxonFormatWarning):
+        run_test_unknown_fields(allow_unknown_fields=True)
+
+
+def test_namedtuple_raise_and_warn_missing_fields():
+    def run_test_missing_fields(**kwargs):
+        with tempfile.TemporaryFile() as fp:
+            module = sys.modules[__name__]
+            DynamicNamedTuple = namedtuple("DynamicNamedTuple", ["a", "b"], module=__name__)
+            setattr(module, "DynamicNamedTuple", DynamicNamedTuple)
+            save(fp, DynamicNamedTuple(a=123, b=2.0))
+            DynamicNamedTuple = namedtuple("DynamicNamedTuple", ["a"], module=__name__)
+            setattr(module, "DynamicNamedTuple", DynamicNamedTuple)
+            loaded_pytree = load(fp, **kwargs)
+            assert type(loaded_pytree) is DynamicNamedTuple
+            assert loaded_pytree == DynamicNamedTuple(a=123)
+    with pytest.raises(JaxonFormatError):
+        run_test_missing_fields(allow_missing_fields=False)
+    with pytest.warns(JaxonFormatWarning):
+        run_test_missing_fields(allow_missing_fields=True)
+
+
+def test_namedtuple_raise_and_warn_unknown_fields():
+    def run_test_unknown_fields(**kwargs):
+        with tempfile.TemporaryFile() as fp:
+            module = sys.modules[__name__]
+            DynamicNamedTuple = namedtuple("DynamicNamedTuple", ["existing"], module=__name__)
+            setattr(module, "DynamicNamedTuple", DynamicNamedTuple)
+            save(fp, DynamicNamedTuple(existing=123))
+            DynamicNamedTuple = namedtuple(
+                "DynamicNamedTuple", ["existing", "missing_mandatory", "missing_default"],
+                defaults=[2], module=__name__)
+            setattr(module, "DynamicNamedTuple", DynamicNamedTuple)
+            loaded_pytree = load(fp, **kwargs)
+            assert loaded_pytree.existing == 123
+            assert type(loaded_pytree.missing_mandatory) is JaxonNotLoaded
+            assert loaded_pytree.missing_default == 2
     with pytest.raises(JaxonFormatError):
         run_test_unknown_fields(allow_unknown_fields=False)
     with pytest.warns(JaxonFormatWarning):
