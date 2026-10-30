@@ -324,7 +324,7 @@ def to_atom(pytree: PyTree,
             break
         result = None
         for marshaler in marshalers:
-            result = marshaler(pytree)
+            result = marshaler(marshaled)
             if result is not None:
                 break
         if result is None:
