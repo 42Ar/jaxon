@@ -40,6 +40,8 @@ from jaxon import load, save, CircularPyTreeError, JaxonNotLoaded, PyTree, \
     JaxonFormatWarning, has_common_prefix, JAXON_PY_NUMERIC_TYPES, JAXON_PY_CONTAINER_TYPES, \
     JaxonTypeWarning, JaxonTypeError, JAXON_NUMPY_NUMERIC_TYPES, __version__, \
     JAXON_ROOT_GROUP_KEY, JAXON_VERSION_GROUP_KEY, JaxonFormatError
+from jaxon._unmarshalers import supply_dataclass_unmarshaler, supply_namedtuple_unmarshaler, \
+    jaxon_interface_unmarshaler, supply_dill_unmarshaler
 from .testing.classes import CustomDataclass, ObjectForDill, CustomTypeReturnDict, \
     CustomTypeReturnTuple, CustomNamedTuple
 from .testing.data import TEST_JAXON_ATOMIC, TEST_NUMPY_ARRAY_VALUES, TEST_JAX_ARRAY_DTYPES, \
@@ -581,3 +583,47 @@ def test_namedtuple_raise_and_warn_unknown_fields():
         run_test_unknown_fields(allow_unknown_fields=False)
     with pytest.warns(JaxonFormatWarning):
         run_test_unknown_fields(allow_unknown_fields=True)
+
+
+def test_unmarshalers_ignore_other_or_invalid_type_hints():
+    """Unmarshalers should ignore other or invalid type hints by returning 
+    None (passing it to the next unmarshaler in the chain)."""
+    for unmarshaler in (supply_dataclass_unmarshaler(False, False),
+                        supply_namedtuple_unmarshaler(False, False),
+                        jaxon_interface_unmarshaler,
+                        supply_dill_unmarshaler(True, {})):
+        # invalid type hint syntax: 
+        for type_info in (
+            "_OTHER[a.B]", "_OTHER[a[b]]", 
+            "_OTHER[a[b]", "_OTHER]", "_OTHER[a" # invalid type hints (multiple or unmatched '['/']').
+        ):
+            assert unmarshaler(type_info, {}) is None
+
+
+def test_unmarshalers_raise_on_invalid_type_hints_and_data():
+    """Raise a JaxonFormatError when the type hint or data is invalid for given unmarshaler."""
+    dataclass_name = f"{CustomDataclass.__module__}.CustomDataclass"
+    namedtuple_name = f"{CustomNamedTuple.__module__}.CustomNamedTuple"
+    dataclass_unmarshaler = supply_dataclass_unmarshaler(False, False)
+    namedtuple_unmarshaler = supply_namedtuple_unmarshaler(False, False)
+    dill_unmarshaler = supply_dill_unmarshaler(True, {})
+    marshalers = [
+        (dataclass_unmarshaler, "dclass", {}, "expected type argument"),
+        (dataclass_unmarshaler, f"dclass[{dataclass_name}]", [1], "expected dict"),
+        (dataclass_unmarshaler, f"dclass[{namedtuple_name}]", {}, "is a dataclass"),
+        (namedtuple_unmarshaler, "namedtuple", {}, "expected type argument"),
+        (namedtuple_unmarshaler, f"namedtuple[{namedtuple_name}]", [1], "expected dict"),
+        (namedtuple_unmarshaler, f"namedtuple[{dataclass_name}]", {}, "is a named tuple"),
+        (jaxon_interface_unmarshaler, "jaxon", {}, "expected type argument"),
+        (jaxon_interface_unmarshaler, f"jaxon[{dataclass_name}]", {}, "from_jaxon"),
+        (dill_unmarshaler, "dill[x]", "x", "unexpected type argument"),
+    ]
+    for unmarshaler, type_info, marshaled, message in marshalers:
+        with pytest.raises(JaxonFormatError, match=message):
+            unmarshaler(type_info, marshaled)
+
+def test_raise_load_dill_without_allow_dill():
+    with tempfile.TemporaryFile() as fp:
+        save(fp, ObjectForDill(1), allow_dill=True)
+        with pytest.raises(JaxonFormatError, match="allow_dill"):
+            load(fp)  # allow_dill=False by default

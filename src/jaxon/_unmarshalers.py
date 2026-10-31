@@ -27,7 +27,7 @@ from ._common import (
 )
 
 
-def check_fields(
+def _check_fields(
     qualified_name: str,
     field_names: set[str],
     available_field_names: set[str],
@@ -88,7 +88,7 @@ def supply_dataclass_unmarshaler(
         fields = dataclasses.fields(instance)
         field_names = {f.name for f in fields}
         available_field_names = dict_.keys()
-        check_fields(
+        _check_fields(
             get_qualified_name(instance),
             set(field_names),
             set(available_field_names),
@@ -136,7 +136,7 @@ def supply_namedtuple_unmarshaler(
             raise JaxonFormatError(f"expected that {qualified_name!r} is a named tuple")
         field_names = set(cls_._fields)
         available_field_names = set(dict_.keys())
-        check_fields(
+        _check_fields(
             qualified_name,
             field_names,
             available_field_names,
@@ -191,7 +191,7 @@ def supply_dill_unmarshaler(allow_dill: bool, dill_kwargs: dict) -> Unmarshaler:
         if th != "dill":
             return None
         if ta is not None:
-            raise JaxonFormatError("expected a type argument")
+            raise JaxonFormatError(f"unexpected type argument {ta!r} for type hint 'dill'")
         if not allow_dill:
             raise JaxonFormatError(
                 "cannot load dill serialized object as allow_dill=False"
