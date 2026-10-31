@@ -29,7 +29,7 @@ import numpy as np
 import jax.numpy as jnp
 from jaxon._common import JAXON_JAX_ARRAY_TYPE, JAXON_PY_NUMERIC_TYPES, \
     JAXON_NUMPY_ATOMIC_TYPES, JaxonNotLoaded, JaxonNumpyNumeric, JAXON_PY_CONTAINER_TYPES, \
-    MIN_LENGTH_FOR_REFERENCEABLE_STR
+    MIN_LENGTH_FOR_REFERENCEABLE_STR, is_namedtuple_class
 from jaxon._save import base_type
 
 
@@ -188,6 +188,14 @@ def _assert_tree_equal(saved, loaded, downcast_to_base_types, py_to_np_types,
                 del unmatched[i]
             return
         raise AssertionError(f"Expected code to be unreachable, but got: {loaded!r}")  # pragma: no cover
+
+    if is_namedtuple_class(type(saved)):
+        assert type(loaded) is type(saved)
+        assert len(saved) == len(loaded)
+        for v1, v2 in zip(saved, loaded):
+            _assert_tree_equal(v1, v2, downcast_to_base_types, py_to_np_types,
+                               checked_objects_saved, checked_objects_loaded)
+        return
 
     if isinstance(saved, PyTreeTestNode):
         assert type(loaded) is type(saved)
