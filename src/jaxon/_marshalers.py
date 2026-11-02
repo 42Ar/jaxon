@@ -20,7 +20,7 @@ Built in marshalers which convert custom objects into pytrees of supported types
 
 from dataclasses import fields, is_dataclass
 import dill
-from ._common import Marshaler, PyTree, get_class, get_qualified_name, is_namedtuple_class
+from ._common import Marshaler, PyTree, get_class, get_qualified_name, is_namedtuple
 
 
 def class_can_be_found(qualified_name: str) -> bool:
@@ -44,7 +44,7 @@ def dataclass_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
 
 
 def namedtuple_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
-    if not is_namedtuple_class(type(pytree)):
+    if not is_namedtuple(type(pytree)):
         return None
     th = get_qualified_name(pytree)
     if not class_can_be_found(th):

@@ -23,7 +23,7 @@ import warnings
 import dill
 from ._common import (
     JaxonFormatError, JaxonFormatWarning, JaxonNotLoaded, PyTree, Unmarshaler, 
-    get_class, get_qualified_name, is_namedtuple_class, split_type_hint_and_type_arg
+    get_class, get_qualified_name, is_namedtuple, split_type_hint_and_type_arg
 )
 
 
@@ -132,7 +132,7 @@ def supply_namedtuple_unmarshaler(
         if type(dict_) is not dict:
             raise JaxonFormatError("expected dict for marshaled named tuple")
         cls_ = get_class(qualified_name)
-        if not is_namedtuple_class(cls_):
+        if not is_namedtuple(cls_):
             raise JaxonFormatError(f"expected that {qualified_name!r} is a named tuple")
         field_names = set(cls_._fields)
         available_field_names = set(dict_.keys())
