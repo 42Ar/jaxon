@@ -29,7 +29,8 @@ import jax.numpy as jnp
 import numpy as np
 from numpy.random import Generator
 from jaxon import PyTree
-from .classes import CustomTypeReturnDict, ObjectForDill, CustomTypeReturnTuple, CustomDataclass
+from .classes import CustomTypeReturnDict, ObjectForDill, CustomTypeReturnTuple, CustomDataclass, \
+    CustomNamedTuple
 from .data import TEST_JAXON_ATOMIC, UNHASHABLE_ATOMIC_TYPES, TEST_NUMPY_ARRAY_VALUES, \
     TEST_JAX_ARRAY_DTYPES, get_jax_array_values, SPECIAL_CHARS, SPECIAL_BYTES
 
@@ -64,7 +65,7 @@ def build_fuzz_tree(rng: Generator, cur_depth: int, max_depth: int, all_objects:
         subtree = build_fuzz_tree(rng, cur_depth, max_depth, all_objects, only_hashable_objects,
                                   only_hashable=only_hashable)
         custom_class = _choice(rng, [ObjectForDill, CustomTypeReturnDict,
-                                     CustomTypeReturnTuple, CustomDataclass])
+                                     CustomTypeReturnTuple, CustomDataclass, CustomNamedTuple])
         pytree = custom_class(subtree)
     elif rng.random() < 0.5 and cur_depth < max_depth:
         # generate container
