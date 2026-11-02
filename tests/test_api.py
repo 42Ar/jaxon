@@ -481,7 +481,7 @@ def test_namedtuple_not_found_under_qualified_name_requires_dill():
     assert type(loaded).__qualname__ == LocalNamedTuple.__qualname__ and loaded.a == 1
 
 
-def test_raise_and_warn_missing_fields():
+def test_dataclass_raise_and_warn_missing_fields():
     def run_test_missing_fields(**kwargs):
         with tempfile.TemporaryFile() as fp:
             Dynamic = make_dataclass(
@@ -510,7 +510,7 @@ def test_raise_and_warn_missing_fields():
         run_test_missing_fields(allow_missing_fields=True)
 
 
-def test_raise_and_warn_unknown_fields():
+def test_dataclass_raise_and_warn_unknown_fields():
     def run_test_unknown_fields(**kwargs):
         with tempfile.TemporaryFile() as fp:
             Dynamic = make_dataclass(
