@@ -546,6 +546,40 @@ def test_raise_and_warn_unknown_fields():
         run_test_unknown_fields(allow_unknown_fields=True)
 
 
+def test_custom_marshaler_chain():
+    """A marshaler may return another custom object that requires a marshaler itself."""
+    class Inner:
+        pass
+
+    class Outer:
+        def __init__(self, inner):
+            self.inner = inner
+            self.marshaled = False
+
+    def marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
+        if isinstance(pytree, Outer):
+            # Original bug that sparked this test re-marshaled the same object (infinite loop);
+            # So we guard for that here
+            assert not pytree.marshaled, "marshaler applied again to the original object"
+            pytree.marshaled = True
+            return "outer", pytree.inner
+        if isinstance(pytree, Inner):
+            return "inner", {}
+        return None
+
+    def unmarshaler(type_hint: str, pytree: PyTree) -> PyTree | None:
+        if type_hint == "outer":
+            return Outer(pytree)
+        if type_hint == "inner":
+            return Inner()
+        return None
+
+    with tempfile.TemporaryFile() as fp:
+        save(fp, Outer(Inner()), custom_marshalers=(marshaler,))
+        loaded = load(fp, custom_unmarshalers=(unmarshaler,))
+    assert type(loaded) is Outer and type(loaded.inner) is Inner
+
+
 def test_namedtuple_raise_and_warn_missing_fields():
     def run_test_missing_fields(**kwargs):
         with tempfile.TemporaryFile() as fp:
@@ -621,6 +655,7 @@ def test_unmarshalers_raise_on_invalid_type_hints_and_data():
     for unmarshaler, type_info, marshaled, message in marshalers:
         with pytest.raises(JaxonFormatError, match=message):
             unmarshaler(type_info, marshaled)
+
 
 def test_raise_load_dill_without_allow_dill():
     with tempfile.TemporaryFile() as fp:
