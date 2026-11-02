@@ -25,6 +25,7 @@ Frank Hermann
 """
 
 from abc import ABC, abstractmethod
+from itertools import permutations
 import numpy as np
 import jax.numpy as jnp
 from jaxon._common import JAXON_JAX_ARRAY_TYPE, JAXON_PY_NUMERIC_TYPES, \
@@ -169,24 +170,28 @@ def _assert_tree_equal(saved, loaded, downcast_to_base_types, py_to_np_types,
             return
         if type(loaded) in (set, frozenset):
             assert len(saved) == len(loaded)
-            unmatched = list(loaded)
-            for x in saved:
-                for i, y in enumerate(unmatched):
-                    checked_objects_saved_cpy = set(checked_objects_saved)
-                    checked_objects_loaded_cpy = set(checked_objects_loaded)
-                    try:
-                        _assert_tree_equal(x, y, downcast_to_base_types, py_to_np_types, checked_objects_saved_cpy, checked_objects_loaded_cpy)
-                    except AssertionError:
-                        continue
-                    checked_objects_saved.clear()
-                    checked_objects_saved |= checked_objects_saved_cpy
-                    checked_objects_loaded.clear()
-                    checked_objects_loaded |= checked_objects_loaded_cpy
-                    break
-                else:
-                    assert False, f"frozenset/set element {x!r} exists in saved but not found in loaded"
-                del unmatched[i]
-            return
+            # Set elements are unordered and the comparison carries reference-tracking
+            # state. A greedy pairing can be locally valid yet make a later element
+            # impossible to match, so try complete bijections. The first permutation
+            # is the old greedy order, so the common case still costs one pass.
+            for permutation in permutations(loaded):
+                checked_objects_saved_cpy = set(checked_objects_saved)
+                checked_objects_loaded_cpy = set(checked_objects_loaded)
+                try:
+                    for x, y in zip(saved, permutation):
+                        _assert_tree_equal(x, y, downcast_to_base_types, py_to_np_types,
+                                           checked_objects_saved_cpy,
+                                           checked_objects_loaded_cpy)
+                except AssertionError:
+                    continue
+                checked_objects_saved.clear()
+                checked_objects_saved |= checked_objects_saved_cpy
+                checked_objects_loaded.clear()
+                checked_objects_loaded |= checked_objects_loaded_cpy
+                return
+            raise AssertionError(
+                f"no reference-consistent matching between set elements {saved!r} "
+                f"and {loaded!r}")
         raise AssertionError(f"Expected code to be unreachable, but got: {loaded!r}")  # pragma: no cover
 
     if is_namedtuple(type(saved)):
