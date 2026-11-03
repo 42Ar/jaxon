@@ -65,6 +65,7 @@ keys may themselves be pytrees. Circular references are detected and raise an er
 |`np.str_`, `np.bytes_`, `np.void`           |Corresponding native HDF5 type                                       |
 |`np.ndarray` ¹, `jax.Array`                 |Compatible native HDF5 type                                          |
 |Python dataclasses                          |HDF5 group                                                           |
+|Python named tuples                         |HDF5 group                                                           |
 
 ¹ The actual data and the datatype including field names are stored. Column titles are not preserved. Fields of type `np.object_` and `np.str_` are not supported.
 
@@ -91,6 +92,9 @@ save("example.hdf5", m)
 print(load("example.hdf5"))  # Model(weights=Array([1., 2.], dtype=float32), bias=0.5, name='linear')
 ```
 
+The class must be importable by its qualified name when loading. Dataclasses defined locally
+(e.g. inside a function) are not found this way and require `allow_dill=True`.
+
 Machine learning packages such as [Equinox](https://docs.kidger.site/equinox/)
 automatically make all modules Python dataclasses, so Jaxon is fully compatible
 with them.
@@ -108,6 +112,31 @@ result = load(
     allow_unknown_fields=True,   # fields in class but absent from file: use default or an instance of JaxonNotLoaded
 )
 ```
+
+
+### Named tuples
+
+Named tuples created with `collections.namedtuple` or `typing.NamedTuple` are stored as an
+HDF5 group. Jaxon stores the module name, class name, and all field values by field name.
+
+```python
+from typing import NamedTuple
+from jaxon import save, load
+
+class Point(NamedTuple):
+    x: float
+    y: float
+
+save("point.hdf5", Point(1.0, 2.0))
+print(load("point.hdf5"))  # Point(x=1.0, y=2.0)
+```
+
+The class must be importable by its qualified name when loading. Named tuples defined locally
+(e.g. inside a function) are not found this way and require `allow_dill=True`.
+
+On load, the instance is created via `_make` (bypassing a custom `__new__`), and field defaults
+are preserved. The options `allow_missing_fields` and `allow_unknown_fields` behave as described
+for [dataclasses](#schema-evolution).
 
 
 ### Python numeric types
@@ -206,13 +235,14 @@ result = load("data.hdf5", custom_unmarshalers=[unmarshal])
 ```
 
 If multiple marshalers are provided the first that returns a non-`None` result is used.
-Note that the `qualified_name` returned by the marshaler can be an arbitrary identifier, but it must be unique among all marshalers (must not start with `dclass`,
-`jaxon` or `dill`) and must not include the control characters `:`, `#` and `'`. Whitespace
-at the end and start is stripped during loading. Typically, it is a string of the form
-`marshaler_name[type_info]` where `marshaler_name` identifies the marshaler and `type_info`
-is additional information for type reconstruction. Custom marshalers take priority over the
-`to_jaxon`/`from_jaxon` and dataclass marshaling, which are internally also implemented
-as marshaler functions. 
+Note that the `qualified_name` returned by the marshaler can be an arbitrary identifier,
+but it should be unique among all marshalers (should not start with `dclass`, `namedtuple`,
+`jaxon` or `dill`) and must not include the control characters `:`, `#` and `'`.
+Whitespace at the end and start is stripped during loading. Typically, it is a string of
+the form `marshaler_name[type_info]` where `marshaler_name` identifies the marshaler and
+`type_info` is additional information for type reconstruction. Custom marshalers take
+priority over the builtin marshalers responsible for dataclasses, named tuples,
+the `to_jaxon`/`from_jaxon` interface and dill.
 
 
 ### Serialization with dill
@@ -294,8 +324,6 @@ fields, list items, list objects themselves, ...) by a single HDF5 attribute. Th
 track of their order in lists. For container types, a group is created additionally which stores the
 contents of the container. For arrays and buffers, a dataset is created which holds the data.
 
-
-
 Consider the following example:
 
 ```python
@@ -361,11 +389,13 @@ represented as strings without typehints, they are used directly as HDF5 group k
 two attributes are created: One with the HDF5 group key `key(i)` which must be immediately followed
 by an attribute with HDF5 group key `value(i)`. Here, `i` is the index of the entry in the dict, which is checked during loading. The two attributes store the key and value pytrees, respectively.
 
+
 #### list, tuple, set, frozenset
 
 Python `list`, `tuple`, `set` and `frozenset` objects are all stored in the same manner: A group
 is created in which the HDF5 keys are plain (stringified) indices starting at zero. Note that
 these indices are not checked during loading. 
+
 
 ### NumPy generic types
 
@@ -381,6 +411,7 @@ Furthermore, the following NumPy types are supported:
 
 The data is always stored in an HDF5 dataset. Note that for `bytes_` and `str_` trailing null
 bytes are removed. This is a standard practice.
+
 
 ### NumPy arrays
 
@@ -451,17 +482,18 @@ Furthermore, whitespace around the control characters `/`, `#`, `[`, `]` and `:`
 ### Marshalers
 
 If a type is not one of the above, marshalers are applied in order to convert it to one of the
-above. Jaxon comes with a marshaler for dataclasses, one for objects that support the
-`to_jaxon`/`from_jaxon` interface and one that uses dill. The latter one must be opted in
-explicitly as explained earlier. When a marshaler is applied, jaxon appends a `#` to the typehint
-followed by the type hint that the marshaler produced. For example, the dataclass marshaler
-produces the typehint `dclass[...]` where `...` is the module and class name of the dataclass
-separated by a dot. The jaxon interface marshaler produces `jaxon[...]`. Note that the marshaled
-representation itself (for example it is a dict for dataclasses) can nowhere be referenced in the pytree (if it is referenced, the reference
-will be broken). The returned, marshaled object is considered to be a temporary representation of
-the object. Note that a marshaler might return any type, including one that must be processed
-by another marshaler. In this case, another `#` is appended to the typehint forming a chain
-of marshalers.
+above. Jaxon comes with a marshaler for dataclasses, one for named tuples, one for objects that
+support the `to_jaxon`/`from_jaxon` interface and one that uses dill. The latter one must be
+opted in explicitly as explained earlier. When a marshaler is applied, jaxon appends a `#` to the
+typehint followed by the type hint that the marshaler produced. For example, the dataclass
+marshaler produces the typehint `dclass[...]` where `...` is the module and class name of the
+dataclass separated by a dot. The named tuple marshaler produces `namedtuple[...]` in the same
+way. The jaxon interface marshaler produces `jaxon[...]`. Note that the marshaled representation
+itself (for example it is a dict for dataclasses) can nowhere be referenced in the pytree (if it
+is referenced, the reference will be broken). The returned, marshaled object is considered to be
+a temporary representation of the object. Note that a marshaler might return any type, including
+one that must be processed by another marshaler. In this case, another `#` is appended to the
+typehint forming a chain of marshalers.
 
 
 ## Acknowledgements
