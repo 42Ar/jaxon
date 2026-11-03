@@ -20,24 +20,14 @@ Built in marshalers which convert custom objects into pytrees of supported types
 
 from dataclasses import fields, is_dataclass
 import dill
-from ._common import Marshaler, PyTree, get_class, get_qualified_name, is_namedtuple
-
-
-def class_can_be_found(qualified_name: str) -> bool:
-    """Check if the class can be found under `qualified_name`, which is required to load it again.
-    This is not the case for classes defined inside functions, for example."""
-    try:
-        get_class(qualified_name)
-    except (ImportError, AttributeError):
-        return False
-    return True
+from ._common import Marshaler, PyTree, get_qualified_name, is_namedtuple
 
 
 def dataclass_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
     if not is_dataclass(pytree):
         return None
-    th = get_qualified_name(pytree)
-    if not class_can_be_found(th):
+    th = get_qualified_name(type(pytree))
+    if th is None:
         return None  # pass to the next marshaler
     res = {field.name: getattr(pytree, field.name) for field in fields(pytree)}
     return f"dclass[{th}]", res
@@ -46,8 +36,8 @@ def dataclass_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
 def namedtuple_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
     if not is_namedtuple(type(pytree)):
         return None
-    th = get_qualified_name(pytree)
-    if not class_can_be_found(th):
+    th = get_qualified_name(type(pytree))
+    if th is None:
         return None  # pass to the next marshaler
     res = pytree._asdict()
     return f"namedtuple[{th}]", res
@@ -55,7 +45,10 @@ def namedtuple_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
 
 def jaxon_interface_marshaler(pytree: PyTree) -> tuple[str, PyTree] | None:
     if hasattr(pytree, "to_jaxon"):
-        return f"jaxon[{get_qualified_name(pytree)}]", pytree.to_jaxon()
+        th = get_qualified_name(type(pytree))
+        if th is None:
+            return None  # pass to the next marshaler
+        return f"jaxon[{th}]", pytree.to_jaxon()
     return None
 
 

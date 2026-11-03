@@ -23,7 +23,7 @@ import warnings
 import dill
 from ._common import (
     JaxonFormatError, JaxonFormatWarning, JaxonNotLoaded, PyTree, Unmarshaler, 
-    get_class, get_qualified_name, is_namedtuple, split_type_hint_and_type_arg
+    get_class, is_namedtuple, split_type_hint_and_type_arg
 )
 
 
@@ -85,7 +85,7 @@ def supply_dataclass_unmarshaler(
         field_names = {f.name for f in fields}
         available_field_names = dict_.keys()
         _check_fields(
-            get_qualified_name(instance),
+            qualified_name,
             set(field_names),
             set(available_field_names),
             allow_missing_fields,

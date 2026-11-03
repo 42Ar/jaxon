@@ -192,10 +192,18 @@ def has_common_prefix(path: Iterable, other_path: Iterable) -> bool:
     return all(map(lambda ab: ab[0] == ab[1], zip(path, other_path)))
 
 
-def get_qualified_name(obj) -> str:
-    """The returned name fully identifies the class of the object so that a new object can be
-    instantiated later during loading (see `_create_instance`)."""
-    return type(obj).__module__ + "." + type(obj).__qualname__
+def get_qualified_name(type_: type) -> str | None:
+    """The returned name fully identifies `type_` so that it can be resolved again
+    via `get_class` (i.e. this is the inverse of `get_class`). Returns `None` if
+    the type cannot be recovered by `get_class`, for example if it is defined
+    inside a function."""
+    qualified_name = type_.__module__ + "." + type_.__qualname__
+    try:
+        if get_class(qualified_name) is not type_:
+            return None
+    except (ImportError, AttributeError):
+        return None
+    return qualified_name
 
 def get_class(qualified_name: str):
     """Get the class identified by `qualified_name` that was returned by `get_qualified_name`."""
