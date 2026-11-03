@@ -30,6 +30,7 @@ from dataclasses import dataclass, make_dataclass, fields, field
 from pathlib import Path
 import sys
 import tempfile
+import types
 import random
 import pytest
 import jax.numpy as jnp
@@ -73,6 +74,45 @@ def test_atomic_types():
     pytree = {tp.__name__: v for tp, v in TEST_JAXON_ATOMIC.items()}
     for exact_python_numeric_types in (True, False):
         run_roundtrip_test(pytree, exact_python_numeric_types)
+
+
+def test_main_module_class_requires_dill():
+    class MainClass:
+        pass
+
+    MainClass.__module__ = "__main__"
+    with pytest.raises(JaxonTypeError, match="allow_dill"):
+        do_roundtrip(MainClass)
+    loaded = do_roundtrip(MainClass, allow_dill=True)
+    assert loaded.__qualname__ == MainClass.__qualname__
+
+
+def test_dynamic_module_class_requires_dill():
+    module_name = "jaxon_test_dynamic_module"
+    module = types.ModuleType(module_name)
+
+    class DynamicClass:
+        pass
+
+    DynamicClass.__module__ = module_name
+    DynamicClass.__qualname__ = "DynamicClass"
+    module.DynamicClass = DynamicClass
+    sys.modules[module_name] = module
+    try:
+        with pytest.raises(JaxonTypeError, match="allow_dill"):
+            do_roundtrip(DynamicClass)
+    finally:
+        del sys.modules[module_name]
+
+
+def test_locally_defined_class_requires_dill():
+    class LocalClass:
+        pass
+
+    with pytest.raises(JaxonTypeError, match="allow_dill"):
+        do_roundtrip(LocalClass)
+    loaded = do_roundtrip(LocalClass, allow_dill=True)
+    assert loaded.__qualname__ == LocalClass.__qualname__
 
 
 def test_nd_numpy_arrays():

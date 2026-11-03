@@ -34,7 +34,8 @@ from ._common import (
     JaxonFormatError, JAXON_DICT_KEY, JAXON_DICT_VALUE, JAXON_ROOT_GROUP_KEY,
     JaxonError, CircularPyTreeError, DICT_KEY_PATH_ELEMENT,
     JAXON_MISSING, JaxonBuiltin, JAXON_TRUE, JAXON_FALSE,
-    JaxonMissing, JAXON_VERSION_GROUP_KEY, split_type_hint_and_type_arg
+    JaxonMissing, JAXON_VERSION_GROUP_KEY, split_type_hint_and_type_arg,
+    JAXON_TYPE, get_class
 )
 from ._unmarshalers import (
     supply_dataclass_unmarshaler, jaxon_interface_unmarshaler, supply_namedtuple_unmarshaler,
@@ -373,6 +374,14 @@ def load_builtin_type(attrib: AttribInfo, type_info: str, parents: list[PathElem
         if isinstance(res, h5py.Empty):
             return np.void(b'')
         return res
+    if th == JAXON_TYPE:
+        assert_no_type_arg(ta, attrib)
+        attrib_value_str = attrib.get_fixed_length_string(attrib.get_value())
+        try:
+            return get_class(attrib_value_str)
+        except (ImportError, AttributeError) as e:
+            raise JaxonFormatError(f"cannot resolve type {attrib_value_str!r} while "
+                                   f"loading {attrib.path()!r}") from e
 
     # handle container types
     if th == "dict":

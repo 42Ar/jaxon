@@ -23,8 +23,9 @@ Frank Hermann
 """
 
 
-from types import EllipsisType
+from types import BuiltinFunctionType, EllipsisType, FunctionType
 import importlib
+import importlib.util
 from typing import Any, Callable, Iterable
 import numpy as np
 import jax
@@ -59,9 +60,11 @@ JaxonPyNumeric = int | float | bool | complex
 JAXON_PY_NUMERIC_TYPES = {int, float, bool, complex}
 
 # supported python atomic types
-JaxonPyAtomic = JaxonPyNumeric | str | bytearray | bytes | None | EllipsisType | range
+JaxonPyAtomic = (JaxonPyNumeric | str | bytearray | bytes | None | EllipsisType | range
+                 | type | FunctionType | BuiltinFunctionType)
 JAXON_PY_ATOMIC_TYPES = (JAXON_PY_NUMERIC_TYPES
-                         | {str, bytearray, bytes, type(None), EllipsisType, range})
+                         | {str, bytearray, bytes, type(None), EllipsisType, range,
+                            type, FunctionType, BuiltinFunctionType})
 
 # all supported atomic types
 JaxonAtomic = JaxonNumpyAtomic | JaxonPyAtomic
@@ -128,6 +131,7 @@ JAXON_NUMPY_ARRAY = "numpy.ndarray" # typehint for numpy arrays
 JAXON_NUMPY_STR = "numpy.str_"      # typehint for numpy.str_
 JAXON_NUMPY_BYTES = "numpy.bytes_"  # typehint for numpy.bytes_
 JAXON_NUMPY_VOID = "numpy.void"     # typehint for numpy.void
+JAXON_TYPE = "type"                 # typehint for python types and functions
 
 
 class JaxonMissing:
@@ -192,18 +196,33 @@ def has_common_prefix(path: Iterable, other_path: Iterable) -> bool:
     return all(map(lambda ab: ab[0] == ab[1], zip(path, other_path)))
 
 
-def get_qualified_name(type_: type) -> str | None:
+def get_qualified_name(type_: type | FunctionType | BuiltinFunctionType) -> str | None:
     """The returned name fully identifies `type_` so that it can be resolved again
     via `get_class` (i.e. this is the inverse of `get_class`). Returns `None` if
-    the type cannot be recovered by `get_class`, for example if it is defined
-    inside a function."""
-    qualified_name = type_.__module__ + "." + type_.__qualname__
+    the type cannot be reliably recovered by `get_class`.
+
+    This is the case, for example, for classes defined inside a function or for
+    objects that cannot be resolved in another process: objects defined in
+    `__main__`, objects without a module, or objects in modules that cannot be
+    imported (e.g. dynamically created modules registered in `sys.modules`)."""
+    module_name = getattr(type_, "__module__", None)
+    if module_name is None or module_name == "__main__":
+        return None
+    qualified_name = module_name + "." + type_.__qualname__
     try:
         if get_class(qualified_name) is not type_:
             return None
-    except (ImportError, AttributeError):
+    except (ImportError, AttributeError, ValueError):
+        # ValueError: e.g. an empty module name
+        return None
+    try:
+        if importlib.util.find_spec(module_name) is None:
+            return None
+    except (ImportError, ValueError):
+        # ValueError: e.g. a dynamically created module without a spec
         return None
     return qualified_name
+
 
 def get_class(qualified_name: str):
     """Get the class identified by `qualified_name` that was returned by `get_qualified_name`."""

@@ -108,3 +108,11 @@ class CustomDataclass(PyTreeTestNode):
 class CustomNamedTuple(NamedTuple):
     a: Any
     b: Any = 1
+
+
+class CustomTypeSubclass(type):
+    pass
+
+
+def function_for_type_saving(x):
+    return x

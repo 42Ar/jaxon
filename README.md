@@ -64,10 +64,16 @@ keys may themselves be pytrees. Circular references are detected and raise an er
 |All NumPy scalars, including `bool_`        |Corresponding native HDF5 type                                       |
 |`np.str_`, `np.bytes_`, `np.void`           |Corresponding native HDF5 type                                       |
 |`np.ndarray` ¹, `jax.Array`                 |Compatible native HDF5 type                                          |
-|Python dataclasses                          |HDF5 group                                                           |
-|Python named tuples                         |HDF5 group                                                           |
+|Python dataclasses ²                        |HDF5 group                                                           |
+|Python named tuples ²                       |HDF5 group                                                           |
+|Python class and function types ²           |HDF5 utf-8 fixed-length string of qualified name                     |
 
-¹ The actual data and the datatype including field names are stored. Column titles are not preserved. Fields of type `np.object_` and `np.str_` are not supported.
+¹ The actual data and the datatype including field names are stored. Column titles are
+not preserved. Fields of type `np.object_` and `np.str_` are not supported.
+
+² Python class and function types are stored by their qualified name and resolved via
+import when loading. Nested classes are not supported. Classes or functions defined
+inside functions, in `__main__` or in dynamically created modules are not supported.
 
 
 ### Dataclasses

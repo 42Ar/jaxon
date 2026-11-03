@@ -25,6 +25,7 @@ Frank Hermann
 
 
 from importlib.metadata import version
+from types import BuiltinFunctionType, FunctionType
 from typing import Iterable, Union
 import warnings
 from dataclasses import dataclass, field
@@ -37,7 +38,8 @@ from ._common import (
     JAXON_NUMPY_NUMERIC_DTYPES, JAXON_JAX_ARRAY_TYPE, JAXON_NONE, JAXON_ELLIPSIS,
     JAXON_ROOT_GROUP_KEY, JAXON_DICT_KEY, JAXON_DICT_VALUE, JAXON_VERSION_GROUP_KEY,
     CircularPyTreeError, JAXON_JAX_TO_NUMPY_TYPE, JaxonNumpyAtomic,
-    MIN_LENGTH_FOR_REFERENCEABLE_STR, JaxonTypeWarning, JaxonTypeError
+    MIN_LENGTH_FOR_REFERENCEABLE_STR, JaxonTypeWarning, JaxonTypeError, JAXON_TYPE,
+    get_qualified_name
 )
 from ._marshalers import (
     dataclass_marshaler, jaxon_interface_marshaler, namedtuple_marshaler, supply_dill_marshaler
@@ -197,6 +199,13 @@ def convert_builtin_to_atom(pytree: PyTree,
                                       # so downcast_to_base_types is irrelevant
         # remove unnecessary spaces
         return JaxonAtom(repr(pytree).replace(" ", ""))
+
+    # handle python types and functions (note: cannot be subclassed)
+    # (they are singletons, therefore references need not be preserved)
+    if isinstance(pytree, (type, FunctionType, BuiltinFunctionType)):
+        qualified_name = get_qualified_name(pytree)
+        if qualified_name is not None:
+            return JaxonAtom(qualified_name, JAXON_TYPE, can_be_referenced=False)
 
     # numpy generics are stored directly; without typehints
     # except for str_, bytes_ and void (these go into datasets later)

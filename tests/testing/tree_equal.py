@@ -26,6 +26,7 @@ Frank Hermann
 
 from abc import ABC, abstractmethod
 from itertools import permutations
+from types import BuiltinFunctionType, FunctionType
 import numpy as np
 import jax.numpy as jnp
 from jaxon._common import JAXON_JAX_ARRAY_TYPE, JAXON_PY_NUMERIC_TYPES, \
@@ -51,7 +52,8 @@ def _is_non_reference_type(pytree, downcast_to_base_types) -> bool:
     return (pytree is None or pytree is Ellipsis
         or (base is not None
             and (base is not str or len(pytree) < MIN_LENGTH_FOR_REFERENCEABLE_STR))
-        or isinstance(pytree, range))
+        or isinstance(pytree, range)
+        or isinstance(pytree, (type, FunctionType, BuiltinFunctionType)))
 
 
 def _assert_real_equal(x, y):
@@ -127,6 +129,11 @@ def _assert_tree_equal(saved, loaded, downcast_to_base_types, py_to_np_types,
     if type(saved) is range:
         assert type(loaded) is range
         assert saved == loaded
+        return
+    if isinstance(saved, (type, FunctionType, BuiltinFunctionType)):
+        # types and functions are singletons, so identity must be preserved
+        # note: type, FunctionType, BuiltinFunctionType cannot be subclassed
+        assert saved is loaded
         return
     if _is_type(saved, loaded, JAXON_NUMPY_ATOMIC_TYPES, downcast_to_base_types):
         if isinstance(saved, JaxonNumpyNumeric):

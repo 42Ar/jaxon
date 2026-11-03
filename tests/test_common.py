@@ -18,8 +18,12 @@
 
 from collections import namedtuple
 from typing import NamedTuple
+import importlib
+import sys
+import types
 import pytest
-from jaxon._common import is_namedtuple
+from jaxon._common import is_namedtuple, get_qualified_name
+from .testing.classes import function_for_type_saving
 
 
 CollectionNamedTuple = namedtuple("CollectionNamedTuple", ["a", "b"])
@@ -69,3 +73,50 @@ def test_is_namedtuple_true(cls_):
 ])
 def test_is_namedtuple_false(cls_):
     assert not is_namedtuple(cls_)
+
+
+def test_get_qualified_name_of_importable_objects():
+    assert get_qualified_name(int) == "builtins.int"
+    assert get_qualified_name(function_for_type_saving) == (
+        "tests.testing.classes.function_for_type_saving")
+
+
+def test_get_qualified_name_rejects_objects_without_module():
+    namespace = {}
+    exec("def function():\n    pass\n", namespace)
+    no_module_function = namespace["function"]
+    assert no_module_function.__module__ is None
+    assert get_qualified_name(no_module_function) is None
+
+    class NoModuleClass:
+        pass
+
+    NoModuleClass.__module__ = ""
+    NoModuleClass.__qualname__ = "NoModuleClass"
+    assert get_qualified_name(NoModuleClass) is None
+
+
+def test_get_qualified_name_rejects_main_module():
+    class MainClass:
+        pass
+
+    MainClass.__module__ = "__main__"
+    assert get_qualified_name(MainClass) is None
+
+
+def test_get_qualified_name_rejects_dynamic_modules():
+    module_name = "jaxon_test_dynamic_module"
+    module = types.ModuleType(module_name)
+
+    class DynamicClass:
+        pass
+
+    DynamicClass.__module__ = module_name
+    DynamicClass.__qualname__ = "DynamicClass"
+    module.DynamicClass = DynamicClass
+    sys.modules[module_name] = module
+    try:
+        assert importlib.import_module(module_name) is module
+        assert get_qualified_name(DynamicClass) is None
+    finally:
+        del sys.modules[module_name]

@@ -26,10 +26,12 @@ Frank Hermann
 
 
 from itertools import product
+from types import BuiltinFunctionType, FunctionType
 import numpy as np
 import jax
 import jax.numpy as jnp
 from jax.extend.core import array_types as jax_array_types
+from .classes import CustomNamedTuple, CustomTypeSubclass, function_for_type_saving
 
 
 jax.config.update("jax_enable_x64", True)
@@ -88,7 +90,11 @@ TEST_JAXON_ATOMIC = TEST_NUMPY_NUMERIC | {
     type(None): (None,),
     type(Ellipsis): (Ellipsis,),
 
-    range: (range(0), range(10), range(1, 10), range(1, 10, 2))
+    range: (range(0), range(10), range(1, 10), range(1, 10, 2)),
+
+    type: (int, np.ndarray, CustomNamedTuple, CustomTypeSubclass),
+    FunctionType: (function_for_type_saving,),
+    BuiltinFunctionType: (len,),
 }
 TEST_NUMPY_ARRAY_VALUES = TEST_NUMPY_NUMERIC | {
     # np.str_ is not supported in arrays
