@@ -29,40 +29,36 @@ from ._common import (
 
 def _check_fields(
     qualified_name: str,
-    field_names: set[str],
-    available_field_names: set[str],
+    class_field_names: set[str],
+    loaded_field_names: set[str],
     allow_missing_fields: bool,
     allow_unknown_fields: bool,
     unknown_fields_hint: str,
 ) -> None:
-    """Raise or warn if the fields stored in the HDF5 file do not match the class definition."""
-    missing_fields = available_field_names - field_names
+    """Raise or warn if the fields stored in the HDF5 file (`loaded_field_names`)
+    do not match the fields in the class definition (`class_field_names`)."""
+    missing_fields = loaded_field_names - class_field_names
     if missing_fields:
-        message = (
-            f"The following fields in {qualified_name!r} are present in "
-            "the HDF5 file but are missing in the class "
-            f"definition: {', '.join(map(repr, missing_fields))}"
-        )
+        msg = f"The following fields for {qualified_name!r} are stored in " \
+              "the HDF5 file but are missing in the class definition: " \
+              f"{', '.join(map(repr, sorted(missing_fields)))}."
         if allow_missing_fields:
-            warnings.warn(message, JaxonFormatWarning)
+            warnings.warn(msg, JaxonFormatWarning)
         else:
             raise JaxonFormatError(
-                message + ". To omit this error run with allow_missing_fields=True."
-            )
-    unknown_fields = field_names - available_field_names
+                msg + " To omit this error run with allow_missing_fields=True.")
+    unknown_fields = class_field_names - loaded_field_names
     if unknown_fields:
-        message = (
-            f"the following fields in {qualified_name!r} are present in "
-            "the class definition but are missing in the HDF5 "
-            f"file: {', '.join(map(repr, unknown_fields))}"
-        )
+        msg = f"The following fields of {qualified_name!r} are present in " \
+              "the class definition but are not stored in the HDF5 file: " \
+              f"{', '.join(map(repr, sorted(unknown_fields)))}."
         if allow_unknown_fields:
-            warnings.warn(message, JaxonFormatWarning)
+            warnings.warn(msg + " " + unknown_fields_hint, JaxonFormatWarning)
         else:
             raise JaxonFormatError(
-                message + ". To omit this error run with allow_unknown_fields=True. "
-                + unknown_fields_hint
-            )
+                msg \
+                + " To omit this error run with allow_unknown_fields=True. " \
+                + unknown_fields_hint)
 
 
 def supply_dataclass_unmarshaler(
@@ -94,9 +90,9 @@ def supply_dataclass_unmarshaler(
             set(available_field_names),
             allow_missing_fields,
             allow_unknown_fields,
-            "Missing fields will be initialized using the default_factory or default value. "
+            "The fields will be initialized using their default_factory or default value. "
             "If both are missing JaxonNotLoaded() will be used as a placeholder. "
-            "The __post_init__() logic is never triggered.",
+            "Note: __post_init__() is never called.",
         )
         for field in fields:
             try:
@@ -142,9 +138,8 @@ def supply_namedtuple_unmarshaler(
             available_field_names,
             allow_missing_fields,
             allow_unknown_fields,
-            "Missing fields will be initialized using their default value. If there is "
-            "none, JaxonNotLoaded() will be used as a placeholder.",
-        )
+            "The fields will be initialized using their default value. If there is "
+            "none, JaxonNotLoaded() will be used as a placeholder.",)
         defaults = cls_._field_defaults
         values = []
         for name in cls_._fields:
@@ -173,8 +168,7 @@ def jaxon_interface_unmarshaler(type_info: str, marshaled: PyTree) -> PyTree | N
     if not hasattr(cls_, "from_jaxon"):
         raise JaxonFormatError(
             f"expected that the class {qualified_name!r} marshaled via the "
-            "to_jaxon method has the from_jaxon method"
-        )
+            "to_jaxon method has the from_jaxon method")
     instance = cls_.__new__(cls_)
     instance.from_jaxon(marshaled)
     return instance
@@ -182,7 +176,6 @@ def jaxon_interface_unmarshaler(type_info: str, marshaled: PyTree) -> PyTree | N
 
 def supply_dill_unmarshaler(allow_dill: bool, dill_kwargs: dict) -> Unmarshaler:
     """Unmarshaler for objects that were marshaled with dill."""
-
     def dill_unmarshaler(type_info: str, marshaled: PyTree) -> PyTree | None:
         try:
             th, ta = split_type_hint_and_type_arg(type_info)
@@ -194,8 +187,6 @@ def supply_dill_unmarshaler(allow_dill: bool, dill_kwargs: dict) -> Unmarshaler:
             raise JaxonFormatError(f"unexpected type argument {ta!r} for type hint 'dill'")
         if not allow_dill:
             raise JaxonFormatError(
-                "cannot load dill serialized object as allow_dill=False"
-            )
+                "cannot load dill serialized object as allow_dill=False")
         return dill.loads(marshaled, **dill_kwargs)
-
     return dill_unmarshaler
