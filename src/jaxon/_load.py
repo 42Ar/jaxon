@@ -313,7 +313,7 @@ def load_builtin_type(attrib: AttribInfo, type_info: str, parents: list[PathElem
     """Recursively load the pytree represented by `attrib` iff the pytree is a jaxon builtin type.
     Otherwise, raise an error."""
     th, ta = split_type_hint_and_type_arg(type_info)
-    if not th:
+    if not th and ta is None:
         attrib_value = attrib.get_value()
         if type(attrib_value) in JAXON_NUMPY_NUMERIC_TYPES:
             assert isinstance(attrib_value, JaxonNumpyNumeric)
@@ -426,7 +426,7 @@ def load_builtin_type(attrib: AttribInfo, type_info: str, parents: list[PathElem
         if th == "frozenset":
             pytree = frozenset(pytree)
         return pytree
-    raise JaxonFormatError(f"type hint {th!r} not understood, expected a "
+    raise JaxonFormatError(f"type hint {type_info!r} not understood, expected a "
                            f"type hint for a jaxon builtin type while loading {attrib.path()!r}")
 
 

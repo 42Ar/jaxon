@@ -207,7 +207,11 @@ def get_class(qualified_name: str):
 
 
 def split_type_hint_and_type_arg(type_info: str) -> tuple[str, str | None]:
-    if not type_info:
+    """Splits a string of the form `WAW[WBW]W` returning `(A, B)` where `W` is
+    any amount of whitespace. If the brackets are not present, returns
+    ``(A, None)``. Raises if the brackets are used in an invalid way."""
+    type_info = type_info.strip()
+    if type_info == "":
         return "", None
     if type_info[-1] == "]":
         if "]" in type_info[:-1]:
@@ -217,7 +221,9 @@ def split_type_hint_and_type_arg(type_info: str) -> tuple[str, str | None]:
             raise JaxonFormatError("invalid type argument syntax (multiple occurrence of '[')")
         if len(res) < 2:
             raise JaxonFormatError("invalid type argument syntax (found ']', but no matching '[')")
-        return res[0].rstrip(), res[1].lstrip()
+        return res[0].rstrip(), res[1].strip()
+    if "]" in type_info[:-1]:
+        raise JaxonFormatError("invalid type argument syntax (']' must be at the end of the type hint)")
     if "[" in type_info:
         raise JaxonFormatError("invalid type argument syntax (found '[', but no matching ']')")
     return type_info, None
